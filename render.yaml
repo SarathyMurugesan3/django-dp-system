@@ -3,7 +3,7 @@ services:
     name: dp-privacy-system
     env: python
     buildCommand: "./build.sh"
-    startCommand: "cd proj && gunicorn proj.wsgi:application"
+    startCommand: "cd proj && PYTHONPATH=/opt/render/project/src/proj gunicorn --chdir /opt/render/project/src/proj proj.wsgi:application --bind 0.0.0.0:$PORT"
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.6
