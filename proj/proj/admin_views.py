@@ -16,10 +16,14 @@ def get_all_budgets(request):
     
     Returns overview of all active users and their privacy budgets
     """
+    from .models import PrivacyBudgetLedger
 
     all_budgets = []
     
-    for user_id, ledger in budget_manager.ledgers.items():
+    # Query all ledgers from database
+    ledgers = PrivacyBudgetLedger.objects.all()
+    
+    for ledger in ledgers:
         budget_percentage = (ledger.epsilon_remaining / ledger.max_epsilon) * 100
         
         # Determine status
@@ -32,14 +36,20 @@ def get_all_budgets(request):
         else:
             status = "CRITICAL"
         
+        # Get transaction count
+        transaction_count = ledger.transactions.count()
+        
+        # Get last transaction
+        last_transaction = ledger.transactions.order_by('-timestamp').first()
+        
         all_budgets.append({
-            "user_id": user_id,
+            "user_id": ledger.user_id,
             "epsilon_remaining": round(ledger.epsilon_remaining, 6),
             "epsilon_total": ledger.max_epsilon,
             "budget_percentage": round(budget_percentage, 2),
             "status": status,
-            "total_queries": len(ledger.transactions),
-            "last_query": ledger.transactions[-1].timestamp.isoformat() if ledger.transactions else None,
+            "total_queries": transaction_count,
+            "last_query": last_transaction.timestamp.isoformat() if last_transaction else None,
             "last_refill": ledger.last_refill.isoformat()
         })
     
@@ -79,28 +89,30 @@ def get_system_stats(request):
     """
     Admin endpoint: Get overall system statistics
     """
-    total_users = len(budget_manager.ledgers)
-    total_queries = sum(len(ledger.transactions) for ledger in budget_manager.ledgers.values())
+    from .models import PrivacyBudgetLedger, PrivacyBudgetTransaction
+    
+    ledgers = PrivacyBudgetLedger.objects.all()
+    total_users = ledgers.count()
+    total_queries = PrivacyBudgetTransaction.objects.count()
     
     # Calculate average budget usage
     if total_users > 0:
         avg_budget_used = sum(
             (ledger.max_epsilon - ledger.epsilon_remaining) / ledger.max_epsilon * 100
-            for ledger in budget_manager.ledgers.values()
+            for ledger in ledgers
         ) / total_users
     else:
         avg_budget_used = 0
     
     # Query type breakdown
     query_type_counts = {}
-    for ledger in budget_manager.ledgers.values():
-        for transaction in ledger.transactions:
-            query_type = transaction.query_type
-            query_type_counts[query_type] = query_type_counts.get(query_type, 0) + 1
+    for transaction in PrivacyBudgetTransaction.objects.all():
+        query_type = transaction.query_type
+        query_type_counts[query_type] = query_type_counts.get(query_type, 0) + 1
     
     # Users by status
     status_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "CRITICAL": 0}
-    for ledger in budget_manager.ledgers.values():
+    for ledger in ledgers:
         budget_percentage = (ledger.epsilon_remaining / ledger.max_epsilon) * 100
         if budget_percentage > 50:
             status_counts["HIGH"] += 1
@@ -136,18 +148,31 @@ def export_audit_log(request):
     export_format = request.data.get("format", "json")
     
     # Collect audit logs
+    from .models import PrivacyBudgetTransaction
     audit_data = []
     
     if user_id:
         # Single user
-        ledger = budget_manager.get_or_create_ledger(user_id)
-        audit_data.extend(ledger.get_audit_log())
+        transactions = PrivacyBudgetTransaction.objects.filter(ledger__user_id=user_id).order_by('-timestamp')
+        for txn in transactions:
+            audit_data.append({
+                'timestamp': txn.timestamp.isoformat(),
+                'query_type': txn.query_type,
+                'epsilon_used': txn.epsilon_used,
+                'result': txn.result,
+                'user_id': user_id
+            })
     else:
         # All users
-        for uid, ledger in budget_manager.ledgers.items():
-            for log_entry in ledger.get_audit_log():
-                log_entry['user_id'] = uid
-                audit_data.append(log_entry)
+        transactions = PrivacyBudgetTransaction.objects.all().order_by('-timestamp')
+        for txn in transactions:
+            audit_data.append({
+                'timestamp': txn.timestamp.isoformat(),
+                'query_type': txn.query_type,
+                'epsilon_used': txn.epsilon_used,
+                'result': txn.result,
+                'user_id': txn.ledger.user_id
+            })
     
     if export_format == "csv":
         # Generate CSV
@@ -189,10 +214,15 @@ def reset_all_budgets(request):
             "error": "Confirmation required. Set 'confirm': true"
         }, status=400)
     
-    reset_count = 0
-    for ledger in budget_manager.ledgers.values():
-        ledger.reset_budget(new_epsilon)
-        reset_count += 1
+    from .models import PrivacyBudgetLedger
+    
+    ledgers = PrivacyBudgetLedger.objects.all()
+    reset_count = ledgers.count()
+    
+    for ledger in ledgers:
+        ledger.epsilon_remaining = new_epsilon
+        ledger.max_epsilon = new_epsilon
+        ledger.save()
     
     return Response({
         "message": f"Reset {reset_count} user budgets",
