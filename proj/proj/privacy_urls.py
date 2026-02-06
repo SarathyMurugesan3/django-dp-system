@@ -59,11 +59,11 @@ urlpatterns = [
     path('calculate-cost/', calculate_query_cost),
     
     # Admin Dashboard Endpoints
-    path('admin/all-budgets/', get_all_budgets),
+    path('admin/budgets/', get_all_budgets),
     path('admin/set-budget/<str:user_id>/', set_custom_budget),
-    path('admin/system-stats/', get_system_stats),
-    path('admin/export-audit-log/', export_audit_log),
-    path('admin/reset-all-budgets/', reset_all_budgets),
+    path('admin/stats/', get_system_stats),
+    path('admin/export-audit/', export_audit_log),
+    path('admin/reset-all/', reset_all_budgets),
 ]
 
 
