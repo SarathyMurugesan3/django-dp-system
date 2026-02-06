@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: dp-privacy-system
+    env: python
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn proj.wsgi:application"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.6
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DP_NOISE_SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: dp-database
+          property: connectionString
+      - key: DJANGO_SETTINGS_MODULE
+        value: proj.settings
+      - key: DEBUG
+        value: False
+      - key: DP_SEED_ROTATION_HOURS
+        value: 24
+
+databases:
+  - name: dp-database
+    databaseName: privacy_db
+    user: privacy_user
