@@ -4,5 +4,6 @@ set -o errexit
 
 pip install -r requirements.txt
 
-cd proj
-python manage.py migrate
+# Skip migrations during build - run manually after deployment
+# cd proj
+# python manage.py migrate
