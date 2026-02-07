@@ -38,6 +38,7 @@ ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 # Application definition
 
 INSTALLED_APPS = [
+    'django.contrib.staticfiles',  # Required for collectstatic command
     'corsheaders',  # CORS support for frontend
     'rest_framework', 
     'risk_assessment',
