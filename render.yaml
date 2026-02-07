@@ -3,7 +3,7 @@ services:
     name: django-dp-system
     env: python
     buildCommand: "./build.sh"
-    startCommand: "gunicorn proj.wsgi:application"
+    startCommand: "gunicorn -c gunicorn_config.py proj.wsgi:application"
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.6
