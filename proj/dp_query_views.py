@@ -14,7 +14,9 @@ def execute_dp_query(request):
     """
     Execute differential privacy query with budget enforcement
     
-    Example:
+    Supports two modes:
+    
+    1. Direct Data Mode (backward compatible):
     {
       "user_id": "analyst_001",
       "query_type": "mean",
@@ -23,9 +25,30 @@ def execute_dp_query(request):
       "upper_bound": 100,
       "field_name": "age"
     }
+    
+    2. Database Query Mode (new):
+    {
+      "user_id": "analyst_001",
+      "table_name": "demographics",
+      "field_name": "age",
+      "query_type": "mean",
+      "filters": {
+        "age": {"operator": ">", "value": 18}
+      }
+    }
     """
     user_id = request.data.get("user_id", "default")
     query_type_str = request.data.get("query_type", "count")
+    
+    # Check if this is a database query or direct data query
+    table_name = request.data.get("table_name")
+    
+    if table_name:
+        # Database query mode - delegate to execute_db_query logic
+        from .db_query_views import execute_db_query
+        return execute_db_query(request)
+    
+    # Direct data mode (original behavior)
     data = request.data.get("data", [])
     lower_bound = request.data.get("lower_bound", 0)
     upper_bound = request.data.get("upper_bound", 1000)
@@ -40,7 +63,10 @@ def execute_dp_query(request):
         }, status=400)
     
     if not data:
-        return Response({"error": "data array required"}, status=400)
+        return Response({
+            "error": "data array required for direct data mode",
+            "hint": "Either provide 'data' array OR provide 'table_name' + 'field_name' for database queries"
+        }, status=400)
     
     # Use wrapper for PrivacyEngine compatibility
     engine = PrivacyEngine(budget_manager=budget_manager_wrapper)
@@ -61,6 +87,7 @@ def execute_dp_query(request):
         "result": result,
         "metadata": metadata
     })
+
 
 
 @api_view(["GET"])
