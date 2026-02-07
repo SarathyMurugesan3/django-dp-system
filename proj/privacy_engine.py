@@ -591,8 +591,7 @@ class PrivacyEngine:
             if query_type == QueryType.COUNT:
                 result = dp_count(
                     np.array(data),
-                    epsilon=effective_epsilon,
-                    bounds=(lower_bound, upper_bound)
+                    epsilon=effective_epsilon
                 )
             elif query_type == QueryType.MEAN:
                 result = dp_mean(
