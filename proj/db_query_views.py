@@ -36,19 +36,6 @@ def execute_db_query(request):
         "state": {"operator": "=", "value": "Maharashtra"}
       }
     }
-    
-    Returns:
-    {
-      "result": 35.234,
-      "metadata": {
-        "query_type": "mean",
-        "epsilon_cost": 0.05,
-        "budget_multiplier": 3.0,
-        "effective_cost": 0.15,
-        "similar_queries_detected": 2,
-        "warning": "⚠️ Similar query detected. Budget cost increased 3x."
-      }
-    }
     """
     user_id = request.data.get("user_id", "default")
     table_name = request.data.get("table_name")
@@ -56,19 +43,27 @@ def execute_db_query(request):
     query_type_str = request.data.get("query_type", "mean")
     filters = request.data.get("filters", {})
     
+    response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
+    return Response(response_data, status=status_code)
+
+
+def process_db_query(user_id, table_name, field_name, query_type_str, filters):
+    """
+    Core logic for executing DB queries (reusable by other views)
+    """
     # Validation
     if not table_name:
-        return Response({"error": "table_name required"}, status=400)
+        return {"error": "table_name required"}, 400
     if not field_name:
-        return Response({"error": "field_name required"}, status=400)
+        return {"error": "field_name required"}, 400
     
     try:
         query_type = QueryType(query_type_str.lower())
     except ValueError:
-        return Response({
+        return {
             "error": "Invalid query type",
             "valid_types": ["count", "mean", "sum", "variance", "std"]
-        }, status=400)
+        }, 400
     
     # Step 1: Create query fingerprint
     current_fingerprint = QueryFingerprint(
@@ -133,11 +128,11 @@ def execute_db_query(request):
         import traceback
         error_details = traceback.format_exc()
         print(f"Database query error: {error_details}")  # Log to console
-        return Response({
+        return {
             "error": "Database query failed",
             "message": str(e),
             "details": error_details
-        }, status=500)
+        }, 500
     
     # For COUNT queries, we don't need numeric data - just count the rows
     if query_type == QueryType.COUNT:
@@ -170,21 +165,21 @@ def execute_db_query(request):
                 data = [1] * actual_count  # Dummy data for count
                 data_min, data_max = 0, actual_count
             except Exception as e:
-                return Response({
+                return {
                     "error": "Count query failed",
                     "message": str(e)
-                }, status=500)
+                }, 500
     
     # For non-COUNT queries, we need numeric data
     if query_type != QueryType.COUNT and (not data or len(data) == 0):
-        return Response({
+        return {
             "error": "No numeric data found",
             "message": f"Field '{field_name}' appears to be categorical or empty. For demographics table, try 'recordid' for numeric queries.",
             "table": table_name,
             "field": field_name,
             "filters": filters,
             "suggestion": "Use 'recordid' as field_name for numeric queries, or use query_type='count' for categorical fields"
-        }, status=400)
+        }, 400
     
     # Step 4: Auto-detect bounds from data
     if query_type == QueryType.COUNT:
@@ -214,7 +209,7 @@ def execute_db_query(request):
     )
     
     if result is None:
-        return Response(metadata, status=429)
+        return metadata, 429
     
     # Step 6: Adjust budget if multiplier > 1.0
     if budget_multiplier > 1.0:
@@ -274,11 +269,11 @@ def execute_db_query(request):
             else:
                 metadata['warning'] = f"⚠️ Similar query detected. Budget cost increased {budget_multiplier}x."
     
-    return Response({
+    return {
         "result": result,
         "metadata": metadata,
         "similar_queries": similar_queries if len(similar_queries) > 0 else None
-    })
+    }, 200
 
 
 def get_postgres_type(value):

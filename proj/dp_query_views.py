@@ -44,9 +44,15 @@ def execute_dp_query(request):
     table_name = request.data.get("table_name")
     
     if table_name:
-        # Database query mode - delegate to execute_db_query logic
-        from .db_query_views import execute_db_query
-        return execute_db_query(request)
+        # Database query mode - use shared logic
+        from .db_query_views import process_db_query
+        
+        # Extract fields
+        field_name = request.data.get("field_name")
+        filters = request.data.get("filters", {})
+        
+        response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
+        return Response(response_data, status=status_code)
     
     # Direct data mode (original behavior)
     data = request.data.get("data", [])
