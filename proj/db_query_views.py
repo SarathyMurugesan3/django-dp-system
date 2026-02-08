@@ -435,3 +435,34 @@ def get_query_history(request, user_id):
         'total_queries': len(history_data),
         'history': history_data
     })
+
+
+@api_view(["GET"])
+def list_tables(request):
+    """
+    List available database tables for querying
+    """
+    all_tables = connection.introspection.table_names()
+    
+    # Filter out system tables and Django internal tables
+    filtered_tables = [
+        t for t in all_tables 
+        if not t.startswith('django_') 
+        and not t.startswith('auth_') 
+        and not t.startswith('privacy_')  # Hide internal privacy system tables
+        and t not in ['sqlite_sequence']
+    ]
+    
+    # Add descriptions/metadata if available (optional)
+    tables_meta = []
+    for t in filtered_tables:
+        tables_meta.append({
+            "table_name": t,
+            "display_name": t.replace('_', ' ').title(),
+            "type": "structured"
+        })
+        
+    return Response({
+        "tables": tables_meta,
+        "count": len(tables_meta)
+    })

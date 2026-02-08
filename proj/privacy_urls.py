@@ -24,7 +24,7 @@ from .admin_views import (
     reset_all_budgets
 )
 from .cost_calculator_views import calculate_query_cost
-from .db_query_views import execute_db_query, get_query_history
+from .db_query_views import execute_db_query, get_query_history, list_tables
 from .team_views import create_team, join_team, get_team_members, leave_team
 from .privatized_table_views import get_privatized_table
 
@@ -45,6 +45,7 @@ urlpatterns = [
     # NEW: Database Query Endpoints with Fingerprinting
     path('db-query/', execute_db_query),
     path('query-history/<str:user_id>/', get_query_history),
+    path('tables/', list_tables),
     
     # NEW: Privatized Table Data
     path('privatized-table/', get_privatized_table),
