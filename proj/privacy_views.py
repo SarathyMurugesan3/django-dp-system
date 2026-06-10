@@ -26,7 +26,11 @@ def assess_and_privatize(request):
 
     records = request.data.get("records")
     table_name = request.data.get("table_name")
+    ALLOWED_SCHEMAS = {'public', 'railway', 'app_data'}
     schema = request.data.get("schema", "public")
+    if schema not in ALLOWED_SCHEMAS:
+        return Response({"error": f"Invalid schema. Allowed: {list(ALLOWED_SCHEMAS)}"}, status=400)
+    
     save_to_db = request.data.get("save_to_db", False)
 
     # Load DB table if requested
@@ -77,7 +81,8 @@ def assess_and_privatize(request):
     anonymized_records, privacy_metadata = privacy_engine.apply_privacy(
         records,
         column_classifications=column_classifications,
-        risk_score=original_risk["risk_score"]
+        risk_score=original_risk["risk_score"],
+        policy_name=policy_name
     )
 
     # ⚠️ SECURITY NOTE: After this point, 'records' variable containing original data
@@ -276,7 +281,8 @@ def trigger_guardian_from_hacker(request):
     patched_records, metadata = engine.apply_privacy(
         records,
         column_classifications,
-        risk_score=85  # High risk - hacker found something
+        risk_score=85,  # High risk - hacker found something
+        policy_name="maximum"
     )
 
     return Response({

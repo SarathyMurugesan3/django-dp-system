@@ -145,13 +145,33 @@ class RiskAssessmentEngine:
         # (e.g. 'Rental Income' triggers 'income' -> 80 risk).
         # We only check for specific dangerous data types in values, like exact age.
         for val in values:
-            
-            # Check for exact age values (high risk if precise)
-            if re.match(r'^\d{1,3}$', str(val)) and 0 < int(str(val)) < 120:
+            val_str = str(val).strip()
+
+            # Exact age values
+            if re.match(r'^\d{1,3}$', val_str) and 0 < int(val_str) < 120:
                 risk = max(risk, 25)
                 if "Precise age values present" not in drivers:
                     drivers.append("Precise age values present")
-        
+
+            # Aadhaar: exactly 12 digits (with or without spaces)
+            aadhaar_clean = val_str.replace(' ', '')
+            if re.match(r'^\d{12}$', aadhaar_clean):
+                risk = max(risk, 95)
+                if "Aadhaar-format identifier detected" not in drivers:
+                    drivers.append("Aadhaar-format identifier detected")
+
+            # PAN: exactly 5 letters + 4 digits + 1 letter
+            if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', val_str.upper()):
+                risk = max(risk, 95)
+                if "PAN-format identifier detected" not in drivers:
+                    drivers.append("PAN-format identifier detected")
+
+            # IFSC: 4 letters + 0 + 6 alphanumeric
+            if re.match(r'^[A-Z]{4}0[A-Z0-9]{6}$', val_str.upper()):
+                risk = max(risk, 80)
+                if "IFSC code detected" not in drivers:
+                    drivers.append("IFSC code detected")
+                    
         return risk, drivers
     
     def _check_combination_risk(self, values: List[Any]) -> Tuple[int, List[str]]:

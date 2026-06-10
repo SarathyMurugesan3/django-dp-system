@@ -362,14 +362,16 @@ class PrivacyBudgetLedger:
         self._apply_sliding_window_refill()
         return self.epsilon_remaining >= epsilon_cost
     
-    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> bool:
-        """Deduct epsilon and log transaction"""
+    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> str:
+        """Deduct epsilon and log transaction. Returns query_id string."""
         self._apply_sliding_window_refill()
         
         if self.epsilon_remaining < epsilon_cost:
-            return False
+            return ""
         
         self.epsilon_remaining -= epsilon_cost
+        
+        generated_query_id = secrets.token_hex(8)
         
         transaction = PrivacyBudgetTransaction(
             timestamp=datetime.now(),
@@ -377,11 +379,11 @@ class PrivacyBudgetLedger:
             epsilon_cost=epsilon_cost,
             epsilon_remaining=self.epsilon_remaining,
             mechanism_used=mechanism,
-            query_id=secrets.token_hex(8)
+            query_id=generated_query_id
         )
         self.transactions.append(transaction)
         
-        return True
+        return generated_query_id
     
     def _apply_sliding_window_refill(self):
         """Sliding window budget recovery"""
@@ -653,13 +655,56 @@ class PrivacyEngine:
                 'message': str(e)
             }
 
-    
+    def privatize_only(
+        self,
+        records: List[Dict[str, Any]],
+        policy_name: str = "standard"
+    ) -> Dict[str, Any]:
+        """Apply privacy transformations without risk assessment"""
+        if not records:
+            return {"error": "Empty records"}
+
+        from .column_classifier import ColumnClassifier
+        classifier = ColumnClassifier()
+        column_classifications = classifier.classify_columns(records)
+
+        privatized, metadata = self.apply_privacy(
+            records,
+            column_classifications=column_classifications,
+            risk_score=50,
+            policy_name=policy_name
+        )
+
+        return {
+            "privatized_data": privatized,
+            "record_count": len(privatized),
+            "privacy_metadata": metadata
+        }
+
+    def classify_columns(
+        self,
+        records: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Classify columns by sensitivity type"""
+        if not records:
+            return {"error": "Empty records"}
+
+        from .column_classifier import ColumnClassifier
+        classifier = ColumnClassifier()
+        classifications = classifier.classify_columns(records)
+
+        return {
+            "column_classifications": classifications,
+            "total_columns": len(classifications)
+        }
+
     def apply_privacy(
         self,
         records: List[Dict[str, Any]],
         column_classifications: Dict[str, Dict[str, Any]],
         risk_score: int = 50,
-        user_id: str = "default"
+        user_id: str = "default",
+        policy_name: str = "standard"
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Apply privacy transformations to dataset
@@ -715,8 +760,9 @@ class PrivacyEngine:
         )
         
         # Flaw 6: l-diversity check
-        config_policy = getattr(self, 'config', None)
-        if config_policy and getattr(config_policy, 'enable_l_diversity', False):
+        from .privacy_policies import PolicyLibrary
+        policy = PolicyLibrary.get_policy(policy_name)
+        if policy and getattr(policy, 'enable_l_diversity', False):
             quasi_ids = [col for col, info in column_classifications.items()
                          if info.get('type') == 'quasi_identifier']
             sensitive_cols = [col for col, info in column_classifications.items()
@@ -906,6 +952,15 @@ class PrivacyEngine:
             
             epsilon_for_field = config.get_epsilon_per_column()
             
+            if not config.allocate_epsilon(f"json_field_{key}", epsilon_for_field):
+                # Budget exhausted — return generalized fallback, not noisy value
+                if 'age' in key:
+                    return age_to_range(float(data))
+                elif 'income' in key or 'salary' in key:
+                    return income_to_range(float(data))
+                else:
+                    return int(round(float(data) / 10) * 10) if abs(float(data)) > 10 else round(float(data), 1)
+            
             try:
                 mech = LaplaceBoundedDomain(
                     epsilon=epsilon_for_field,
@@ -1000,22 +1055,25 @@ class PrivacyEngine:
                 upper=upper_bound
             )
             
-            noisy_values = []
-            for v in numeric_values:
-                val_float = float(v)
-                val_float = max(lower_bound, min(upper_bound, val_float))
-                noisy_v = mech.randomise(val_float)
-                noisy_v = max(lower_bound, min(upper_bound, noisy_v))
-                noisy_values.append(noisy_v)
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    val_float = float(raw_v)
+                    val_float = max(lower_bound, min(upper_bound, val_float))
+                    noisy_v = mech.randomise(val_float)
+                    noisy_v = max(lower_bound, min(upper_bound, noisy_v))
+                    result.append(noisy_v)
             
             if 'age' in column_name.lower() or 'count' in column_name.lower():
-                return [int(round(v)) for v in noisy_values]
+                return [int(round(v)) if v is not None else None for v in result]
             elif 'salary' in column_name.lower() or 'income' in column_name.lower():
-                return [int(round(v / 1000) * 1000) for v in noisy_values]
+                return [int(round(v / 1000) * 1000) if v is not None else None for v in result]
             elif 'score' in column_name.lower() or 'rating' in column_name.lower():
-                return [round(v, 1) for v in noisy_values]
+                return [round(v, 1) if v is not None else None for v in result]
             else:
-                return [int(round(v)) if abs(v) > 10 else round(v, 1) for v in noisy_values]
+                return [int(round(v)) if (v is not None and abs(v) > 10) else (round(v, 1) if v is not None else None) for v in result]
         except Exception:
             return self._bucket_values(numeric_values, num_buckets=10)
     
@@ -1041,7 +1099,7 @@ class PrivacyEngine:
     
     def _transform_generic(self, values: List[Any]) -> List[Any]:
         """Safe fallback transformation (NON-DP hashing)"""
-        return [self._hash_value(str(v))[:32] + '...' for v in values]
+        return [self._hash_value(str(v))[:32] for v in values]
     
     def _apply_k_anonymity(self, values: List[Any], config: PrivacyConfig) -> List[Any]:
         """Apply k-anonymity using randomized response instead of suppression"""

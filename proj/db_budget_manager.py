@@ -98,6 +98,12 @@ class DatabasePrivacyBudgetManager:
         # Lock the ledger row to prevent concurrent modifications
         ledger = LedgerModel.objects.select_for_update().get(pk=ledger.pk)
         
+        # ADD THIS CHECK:
+        if ledger.epsilon_remaining < epsilon_cost:
+            raise ValueError(
+                f"Insufficient budget: {ledger.epsilon_remaining:.4f} < {epsilon_cost}"
+            )
+        
         # Deduct epsilon
         ledger.epsilon_remaining -= epsilon_cost
         ledger.save(update_fields=['epsilon_remaining', 'updated_at'])
