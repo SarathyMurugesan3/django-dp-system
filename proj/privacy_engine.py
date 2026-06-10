@@ -179,24 +179,6 @@ def income_to_range(income: float) -> str:
         return "150000-200000"
     else:
         return "200000+"
-    """Convert monthly income to range buckets"""
-    income_int = int(income)
-    if income_int < 10000:
-        return "0-10000"
-    elif income_int <= 18000:
-        return "10000-18000"
-    elif income_int <= 25000:
-        return "18000-25000"
-    elif income_int <= 35000:
-        return "25000-35000"
-    elif income_int <= 50000:
-        return "35000-50000"
-    elif income_int <= 75000:
-        return "50000-75000"
-    elif income_int <= 100000:
-        return "75000-100000"
-    else:
-        return "100000-1000000"
 
 
 def household_to_range(size: float) -> str:
@@ -232,19 +214,6 @@ def land_to_range(acres: float) -> str:
         return "20.0-50.0"
     else:
         return "50.0+"
-    """Convert land owned to range buckets"""
-    if acres < 0.5:
-        return "0-0.5"
-    elif acres <= 1.0:
-        return "0.5-1.0"
-    elif acres <= 2.0:
-        return "1.0-2.0"
-    elif acres <= 3.0:
-        return "2.0-3.0"
-    elif acres <= 5.0:
-        return "3.0-5.0"
-    else:
-        return "5.0-100.0"
 
 
 def randomized_response_boolean(value: bool, p: float = 0.75) -> bool:
@@ -746,7 +715,51 @@ class PrivacyEngine:
             adjusted_config
         )
         
+        # Flaw 6: l-diversity check
+        config_policy = getattr(self, 'config', None)
+        if config_policy and getattr(config_policy, 'enable_l_diversity', False):
+            quasi_ids = [col for col, info in column_classifications.items()
+                         if info.get('type') == 'quasi_identifier']
+            sensitive_cols = [col for col, info in column_classifications.items()
+                             if info.get('type') == 'sensitive']
+            if quasi_ids and sensitive_cols:
+                l_result = self.check_l_diversity(
+                    records, quasi_ids, sensitive_cols[0]
+                )
+                metadata['l_diversity_check'] = l_result
+        
         return privatized_records, metadata
+    
+    def check_l_diversity(
+        self,
+        records: List[Dict],
+        quasi_identifiers: List[str],
+        sensitive_col: str,
+        l: int = 2
+    ) -> Dict:
+        """
+        Check l-diversity: each equivalence class must have
+        at least l distinct values in the sensitive attribute.
+        Unique(S_E) >= l
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(records)
+        existing_qi = [c for c in quasi_identifiers if c in df.columns]
+
+        if not existing_qi or sensitive_col not in df.columns:
+            return {"violations": 0, "checked": False}
+
+        groups = df.groupby(existing_qi)[sensitive_col].nunique()
+        violations = groups[groups < l]
+
+        return {
+            "checked": True,
+            "l_threshold": l,
+            "violations_found": len(violations),
+            "vulnerable_groups": len(violations),
+            "satisfies_l_diversity": len(violations) == 0
+        }
     
     def _get_privacy_guarantee_type(self, column_type: str) -> str:
         """Classify privacy guarantee type"""
@@ -773,6 +786,7 @@ class PrivacyEngine:
             config.epsilon = 3.0
             config.k_anonymity = 3
         
+        config.epsilon_budget_remaining = config.epsilon
         return config
     
     def _apply_column_transformation(
@@ -959,7 +973,8 @@ class PrivacyEngine:
         dataset_size: int
     ) -> List[Any]:
         """Transform numeric columns with TRUE differential privacy"""
-        numeric_values = [self._safe_numeric(v) for v in values]
+        numeric_values_raw = [self._safe_numeric(v) for v in values]
+        numeric_values = [v for v in numeric_values_raw if v is not None]
         
         if not numeric_values or all(v == 0 for v in numeric_values):
             return values
@@ -1118,12 +1133,12 @@ class PrivacyEngine:
             bucketed.append(bucket_midpoint)
         return bucketed
     
-    def _safe_numeric(self, value: Any) -> float:
+    def _safe_numeric(self, value: Any):
         """Safely convert to numeric"""
         try:
             return float(value)
         except (ValueError, TypeError):
-            return 0.0
+            return None
     
     def _generate_metadata(
         self,

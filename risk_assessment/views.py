@@ -31,8 +31,7 @@ def assess_dataset_risk(request):
     return Response({
         "dataset": dataset_name,
         "record_count": len(records),
-        "risk_result": risk_result,
-        "sample_records": records[:3]
+        "risk_result": risk_result
     })
 
 
@@ -103,41 +102,45 @@ def list_tables(request):
 # ============================
 @api_view(['POST'])
 def assess_query_risk(request):
-    query = request.data.get('query')
+    query = request.data.get('query', '').strip()
 
     if not query:
         return Response({"error": "query required"}, status=400)
 
-    forbidden = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'INSERT', 'UPDATE']
-    if any(word in query.upper() for word in forbidden):
+    query_upper = query.upper()
+
+    if not query_upper.startswith('SELECT'):
         return Response({"error": "Only SELECT queries allowed"}, status=400)
+
+    blocked = ['DROP','DELETE','TRUNCATE','ALTER','INSERT',
+               'UPDATE','EXEC','EXECUTE','UNION','SLEEP',
+               'BENCHMARK','OUTFILE','LOAD_FILE']
+    for word in blocked:
+        if word in query_upper:
+            return Response({"error": f"Disallowed keyword: {word}"}, status=400)
+
+    if 'LIMIT' not in query_upper:
+        query = query.rstrip(';') + ' LIMIT 100'
 
     try:
         with connection.cursor() as cursor:
             cursor.execute(query)
-
             columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
-
             records = [
-                {col: (val if val is not None else "") for col, val in zip(columns, row)}
+                {col: (val if val is not None else "")
+                 for col, val in zip(columns, row)}
                 for row in rows
             ]
-
         if not records:
-            return Response({"error": "No results returned"}, status=404)
+            return Response({"error": "No results"}, status=404)
 
         engine = RiskAssessmentEngine()
         result = engine.analyze_dataset(records)
+        return Response({"record_count": len(records), "risk_result": result})
 
-        return Response({
-            "query": query,
-            "record_count": len(records),
-            "risk_result": result
-        })
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        return Response({"error": "Query execution failed"}, status=500)
 
 
 # ============================

@@ -126,6 +126,32 @@ class DatabasePrivacyBudgetManager:
     
     @staticmethod
     @transaction.atomic
+    def spend_budget(user_id: str, epsilon_cost: float, query_type: str) -> Tuple[bool, str]:
+        try:
+            # Lock the row for this transaction — prevents race condition
+            ledger = LedgerModel.objects.select_for_update().get(user_id=user_id)
+        except LedgerModel.DoesNotExist:
+            return False, "Ledger not found"
+
+        if ledger.epsilon_remaining < epsilon_cost:
+            return False, f"Insufficient budget. Remaining: {ledger.epsilon_remaining:.4f}"
+
+        ledger.epsilon_remaining -= epsilon_cost
+        ledger.save()
+
+        TransactionModel.objects.create(
+            ledger=ledger,
+            epsilon_cost=epsilon_cost,
+            query_type=query_type,
+            epsilon_remaining=ledger.epsilon_remaining,
+            mechanism_used='direct',
+            query_id=secrets.token_hex(8)
+        )
+
+        return True, f"Spent ε={epsilon_cost}. Remaining: {ledger.epsilon_remaining:.4f}"
+
+    @staticmethod
+    @transaction.atomic
     def refill_budget(ledger: LedgerModel) -> Optional[float]:
         """
         Sliding window budget recovery

@@ -62,12 +62,14 @@ def assess_and_privatize(request):
     # ==========================
     privacy_engine = PrivacyEngine()
 
+    from .column_classifier import ColumnClassifier
+
+    classifier = ColumnClassifier()
+    column_classifications = classifier.classify_columns(records)
+
     anonymized_records, privacy_metadata = privacy_engine.apply_privacy(
         records,
-        column_classifications={
-            col: {"type": "quasi_identifier", "sensitivity": "moderate"}
-            for col in records[0].keys()
-        },
+        column_classifications=column_classifications,
         risk_score=original_risk["risk_score"]
     )
 
@@ -237,3 +239,46 @@ def compare_policies(request):
         })
 
     return Response({"comparison": results})
+
+
+# =========================
+# BRIDGE: HACKER -> GUARDIAN
+# =========================
+@api_view(["POST"])
+def trigger_guardian_from_hacker(request):
+    """
+    Bridge endpoint: Hacker AI calls this when a vulnerability is found.
+    Triggers Guardian AI to anonymize the affected data.
+    """
+    vulnerability = request.data.get("vulnerability", {})
+    records = request.data.get("records", [])
+
+    if not records:
+        return Response({
+            "status": "notification_received",
+            "vulnerability": vulnerability,
+            "message": "No records provided - Guardian notified, awaiting dataset.",
+            "action_required": True
+        }, status=200)
+
+    from .column_classifier import ColumnClassifier
+    classifier = ColumnClassifier()
+    column_classifications = classifier.classify_columns(records)
+
+    engine = PrivacyEngine()
+    patched_records, metadata = engine.apply_privacy(
+        records,
+        column_classifications,
+        risk_score=85  # High risk - hacker found something
+    )
+
+    return Response({
+        "status": "guardian_applied",
+        "triggered_by": vulnerability.get("attack", "unknown"),
+        "severity": vulnerability.get("severity", "unknown"),
+        "columns_patched": list(metadata.get("transformations", {}).keys()),
+        "budget_remaining": metadata.get(
+            "privacy_config", {}).get("epsilon_remaining", "unknown"),
+        "escalations": metadata.get("columns_escalated_to_review", []),
+        "record_count": len(patched_records)
+    })

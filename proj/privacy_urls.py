@@ -8,7 +8,8 @@ from .privacy_views import (
     classify_columns,
     list_policies,
     validate_policy,
-    compare_policies
+    compare_policies,
+    trigger_guardian_from_hacker
 )
 from .dp_query_views import (
     execute_dp_query,
@@ -35,6 +36,7 @@ urlpatterns = [
     path('policies/', list_policies),
     path('policies/validate/', validate_policy),
     path('policies/compare/', compare_policies),
+    path('trigger-guardian/', trigger_guardian_from_hacker),
     
     # ShadowSafe-Style Budget System Endpoints
     path('dp-query/', execute_dp_query),
