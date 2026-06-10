@@ -774,13 +774,16 @@ class PrivacyEngine:
         
         if risk_score >= 80:
             config.epsilon = 0.5
+            config.epsilon_budget_remaining = 0.5
             config.k_anonymity = 10
             config.use_strict_mode = True
         elif risk_score >= 60:
             config.epsilon = 1.0
+            config.epsilon_budget_remaining = 1.0
             config.k_anonymity = 7
         elif risk_score >= 40:
             config.epsilon = 2.0
+            config.epsilon_budget_remaining = 2.0
             config.k_anonymity = 5
         else:
             config.epsilon = 3.0
@@ -1000,7 +1003,9 @@ class PrivacyEngine:
             
             noisy_values = []
             for v in numeric_values:
-                noisy_v = mech.randomise(float(v))
+                val_float = float(v)
+                val_float = max(lower_bound, min(upper_bound, val_float))
+                noisy_v = mech.randomise(val_float)
                 noisy_v = max(lower_bound, min(upper_bound, noisy_v))
                 noisy_values.append(noisy_v)
             
@@ -1130,7 +1135,7 @@ class PrivacyEngine:
             bucket_index = int((v - min_val) / bucket_size)
             bucket_index = min(bucket_index, num_buckets - 1)
             bucket_midpoint = min_val + (bucket_index + 0.5) * bucket_size
-            bucketed.append(bucket_midpoint)
+            bucketed.append(round(bucket_midpoint, 2))
         return bucketed
     
     def _safe_numeric(self, value: Any):
