@@ -15,7 +15,7 @@ opendp==0.9.2
 packaging==25.0
 pandas==2.3.3
 pillow==12.1.0
-psycopg2-binary==2.9.9
+mysqlclient==2.2.4
 pyparsing==3.3.1
 python-dateutil==2.9.0.post0
 python-decouple==3.8
