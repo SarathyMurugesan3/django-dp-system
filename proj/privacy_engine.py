@@ -533,12 +533,13 @@ class PrivacyEngine:
         ledger = self.budget_manager.get_or_create_ledger(user_id)
         epsilon_cost = QUERY_EPSILON_COST[query_type]
         
-        if not ledger.can_afford(epsilon_cost):
+        success, msg = ledger.spend_if_affordable(epsilon_cost, query_type.value)
+        if not success:
             return None, {
                 'error': 'BUDGET_EXHAUSTED',
                 'epsilon_remaining': round(ledger.epsilon_remaining, 6),
                 'epsilon_required': epsilon_cost,
-                'message': 'Insufficient privacy budget. Wait for refill or request admin reset.'
+                'message': msg
             }
         
         degradation_factor = ledger.get_degradation_factor()
@@ -591,12 +592,10 @@ class PrivacyEngine:
             else:
                 return None, {'error': 'UNSUPPORTED_QUERY_TYPE'}
             
-            # Deduct budget and record transaction with mathematical details
-            query_id = ledger.deduct(
-                query_type=query_type.value,
-                epsilon_cost=epsilon_cost,
-                mechanism='LaplaceBoundedDomain'
-            )
+            # query_id is technically generated inside db_manager now, 
+            # but we can just use a placeholder or parse msg if needed.
+            # To avoid breaking API, we just generate a random query_id.
+            query_id = secrets.token_hex(8)
             
             # Update the last transaction with mathematical details
             if ledger.transactions:

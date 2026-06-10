@@ -68,10 +68,9 @@ def assess_table_risk(request):
         return Response(result, status=200)
 
     except Exception as e:
-        return Response(
-            {"error": "Risk assessment failed", "detail": str(e)},
-            status=500
-        )
+        import logging
+        logging.getLogger(__name__).error(f"assess_table_risk failed: {str(e)}")
+        return Response({"error": "Risk assessment failed"}, status=500)
 
 
 # ============================
@@ -121,6 +120,13 @@ def assess_query_risk(request):
 
     if 'LIMIT' not in query_upper:
         query = query.rstrip(';') + ' LIMIT 100'
+        
+    # Prevent multiple statements
+    if query.count(';') > 1 or (query.count(';') == 1 and not query.rstrip().endswith(';')):
+        return Response({"error": "Multiple statements not allowed"}, status=400)
+    
+    # Strip trailing semicolon before execution
+    query = query.rstrip(';')
 
     try:
         with connection.cursor() as cursor:
@@ -147,6 +153,12 @@ def assess_query_risk(request):
 # SAFE TABLE FETCHER
 # ============================
 def fetch_table_data(table_name, schema='public'):
+    import re
+    if not re.match(r'^[a-zA-Z0-9_]+$', schema):
+        return []
+    if not re.match(r'^[a-zA-Z0-9_]+$', table_name):
+        return []
+
     with connection.cursor() as cursor:
 
         # Validate table exists

@@ -31,6 +31,10 @@ def assess_and_privatize(request):
 
     # Load DB table if requested
     if table_name:
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]+$', schema) or not re.match(r'^[a-zA-Z0-9_]+$', table_name):
+            return Response({"error": "Invalid table or schema name"}, status=400)
+            
         try:
             with connection.cursor() as cursor:
                 quoted_table = connection.ops.quote_name(table_name)
@@ -47,7 +51,9 @@ def assess_and_privatize(request):
                 return Response({"error": "Table exists but has no data"}, status=404)
 
         except Exception as e:
-            return Response({"error": f"Table fetch failed: {str(e)}"}, status=500)
+            import logging
+            logging.getLogger(__name__).error(f"Table fetch failed: {str(e)}")
+            return Response({"error": "Table fetch failed"}, status=500)
 
     if not records:
         return Response({"error": "records or table_name required"}, status=400)

@@ -305,24 +305,14 @@ class LedgerWrapper:
         self.global_seed = bytes(ledger_model.global_seed)
         self.transactions = []  # Populated on demand
     
-    def can_afford(self, epsilon_cost: float) -> bool:
-        """Check if user has enough budget"""
-        self.ledger_model.refresh_from_db()
-        self.epsilon_remaining = self.ledger_model.epsilon_remaining
-        return self.db_manager.can_afford(self.ledger_model, epsilon_cost)
-    
-    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> str:
-        """Deduct epsilon and record transaction"""
-        query_id = self.db_manager.deduct(
-            self.ledger_model,
-            query_type=query_type,
-            epsilon_cost=epsilon_cost,
-            mechanism=mechanism
+    def spend_if_affordable(self, epsilon_cost: float, query_type: str) -> Tuple[bool, str]:
+        """
+        Atomic check-and-spend. Use this instead of can_afford() + deduct().
+        Prevents TOCTOU race condition.
+        """
+        return DatabasePrivacyBudgetManager.spend_budget(
+            self.user_id, epsilon_cost, query_type
         )
-        # Refresh to get updated epsilon_remaining
-        self.ledger_model.refresh_from_db()
-        self.epsilon_remaining = self.ledger_model.epsilon_remaining
-        return query_id
     
     def get_degradation_factor(self) -> float:
         """Calculate noise scaling factor based on remaining budget"""
