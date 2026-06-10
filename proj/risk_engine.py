@@ -109,8 +109,8 @@ class RiskAssessmentEngine:
         for val in values:
             val_str = str(val)
             
-            # Very long strings suggest unique identifiers
-            if len(val_str) > 20:
+            # Very long strings suggest unique identifiers (skip hex hashes)
+            if len(val_str) > 20 and not re.match(r'^[a-fA-F0-9]{32,}$', val_str):
                 risk = max(risk, 70)
                 drivers.append("Very long unique values detected")
             
@@ -141,25 +141,10 @@ class RiskAssessmentEngine:
         drivers = []
         risk = 0
         
-        # Sensitive keywords (domain-agnostic)
-        sensitive_patterns = {
-            r'\b(password|passwd|pwd|secret)\b': ("Potential credential data", 100),
-            r'\b(ssn|social.security)\b': ("Social security patterns", 100),
-            r'\b(credit.card|card.number|cvv)\b': ("Financial data patterns", 100),
-            r'\b(diagnosis|medical|health|patient)\b': ("Healthcare-related data", 90),
-            r'\b(salary|income|wage|compensation)\b': ("Financial compensation data", 80),
-            r'\b(address|street|apartment|zip)\b': ("Location data detected", 70),
-            r'\b(birth|dob|age)\b': ("Age/birth-related data", 60),
-        }
-        
+        # Checking sensitive patterns against values directly causes false positives 
+        # (e.g. 'Rental Income' triggers 'income' -> 80 risk).
+        # We only check for specific dangerous data types in values, like exact age.
         for val in values:
-            val_str = str(val).lower()
-            
-            for pattern, (driver, pattern_risk) in sensitive_patterns.items():
-                if re.search(pattern, val_str, re.I):
-                    risk = max(risk, pattern_risk)
-                    if driver not in drivers:
-                        drivers.append(driver)
             
             # Check for exact age values (high risk if precise)
             if re.match(r'^\d{1,3}$', str(val)) and 0 < int(str(val)) < 120:
