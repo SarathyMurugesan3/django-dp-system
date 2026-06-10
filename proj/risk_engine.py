@@ -109,8 +109,8 @@ class RiskAssessmentEngine:
         for val in values:
             val_str = str(val)
             
-            # Very long strings suggest unique identifiers (skip hex hashes)
-            if len(val_str) > 20 and not re.match(r'^[a-fA-F0-9]{32,}$', val_str):
+            # Very long strings suggest unique identifiers (skip hex hashes and phrases)
+            if len(val_str) > 20 and not re.match(r'^[a-fA-F0-9]{32,}$', val_str) and ' ' not in val_str:
                 risk = max(risk, 70)
                 drivers.append("Very long unique values detected")
             
