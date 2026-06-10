@@ -162,8 +162,8 @@ def fetch_table_data(table_name, schema='public'):
         if not exists:
             return []
 
-        # Safe fetch with LIMIT to avoid overload
-        cursor.execute(f'SELECT * FROM "{schema}"."{table_name}" LIMIT 500;')
+        quoted_table = connection.ops.quote_name(table_name)
+        cursor.execute(f'SELECT * FROM {quoted_table} LIMIT 500;')
 
         columns = [col[0] for col in cursor.description]
         rows = cursor.fetchall()

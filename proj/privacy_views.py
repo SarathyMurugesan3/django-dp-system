@@ -33,7 +33,8 @@ def assess_and_privatize(request):
     if table_name:
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f'SELECT * FROM "{schema}"."{table_name}" LIMIT 500;')
+                quoted_table = connection.ops.quote_name(table_name)
+                cursor.execute(f'SELECT * FROM {quoted_table} LIMIT 500;')
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchall()
 
