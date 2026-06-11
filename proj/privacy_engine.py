@@ -72,16 +72,20 @@ class PrivacyMechanism(Enum):
 
 
 FIELD_SENSITIVITY_MAP = {
-    'age': {'sensitivity': 1.0, 'lower': 0, 'upper': 120},
+    'age': {'sensitivity': 1.5, 'lower': 0, 'upper': 120}, # Epsilon=1.0 gives noise roughly ± 2 to 4
+    'employee': {'sensitivity': 2.0, 'lower': 0, 'upper': 5000},
+    'year': {'sensitivity': 1.5, 'lower': 1900, 'upper': 2100},
+    'experience': {'sensitivity': 1.0, 'lower': 0, 'upper': 50},
     'household': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'householdsize': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'family': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'size': {'sensitivity': 1.0, 'lower': 1, 'upper': 50},
-    'salary': {'sensitivity': 5000.0, 'lower': 0, 'upper': 1000000},
-    'income': {'sensitivity': 5000.0, 'lower': 0, 'upper': 1000000},
-    'monthlyincome': {'sensitivity': 5000.0, 'lower': 0, 'upper': 200000},
-    'wage': {'sensitivity': 5000.0, 'lower': 0, 'upper': 500000},
-    'pay': {'sensitivity': 5000.0, 'lower': 0, 'upper': 500000},
+    # Salary sensitivity adjusted to ~2000 to keep Laplace noise within the ± 1000 to 3000 range
+    'salary': {'sensitivity': 2000.0, 'lower': 0, 'upper': 1000000},
+    'income': {'sensitivity': 2000.0, 'lower': 0, 'upper': 1000000},
+    'monthlyincome': {'sensitivity': 2000.0, 'lower': 0, 'upper': 200000},
+    'wage': {'sensitivity': 2000.0, 'lower': 0, 'upper': 500000},
+    'pay': {'sensitivity': 2000.0, 'lower': 0, 'upper': 500000},
     'land': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
     'acres': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
     'landowned': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
