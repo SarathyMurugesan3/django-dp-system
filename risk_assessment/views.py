@@ -83,7 +83,12 @@ def list_tables(request):
             cursor.execute("""
                 SELECT table_schema, table_name
                 FROM information_schema.tables
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                WHERE table_schema NOT IN (
+                    'information_schema',
+                    'mysql',
+                    'performance_schema',
+                    'sys'
+                )
                 AND table_type = 'BASE TABLE'
                 ORDER BY table_schema, table_name;
             """)
@@ -164,7 +169,7 @@ def fetch_table_data(table_name, schema='public'):
         # Validate table exists
         cursor.execute("""
             SELECT EXISTS (
-                SELECT FROM information_schema.tables
+                SELECT 1 FROM information_schema.tables
                 WHERE table_schema = %s AND table_name = %s
             );
         """, [schema, table_name])
