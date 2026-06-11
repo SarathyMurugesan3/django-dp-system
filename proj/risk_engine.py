@@ -191,12 +191,19 @@ class RiskAssessmentEngine:
                 if "Precise age values present" not in drivers:
                     drivers.append("Precise age values present")
 
-            # Aadhaar: exactly 12 digits (with or without spaces)
-            aadhaar_clean = val_str.replace(' ', '')
+            # Aadhaar: exactly 12 digits (with or without spaces or dashes)
+            aadhaar_clean = val_str.replace(' ', '').replace('-', '')
             if re.match(r'^\d{12}(?:\.0)?$', aadhaar_clean):
                 risk = max(risk, 95)
                 if "Aadhaar-format identifier detected" not in drivers:
                     drivers.append("Aadhaar-format identifier detected")
+
+            # Credit Card: 16 digits (with or without spaces or dashes)
+            cc_clean = val_str.replace(' ', '').replace('-', '')
+            if re.match(r'^\d{16}(?:\.0)?$', cc_clean):
+                risk = max(risk, 95)
+                if "Credit card format detected" not in drivers:
+                    drivers.append("Credit card format detected")
 
             # PAN: exactly 5 letters + 4 digits + 1 letter
             if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', val_str.upper()):
