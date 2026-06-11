@@ -99,7 +99,45 @@ class RiskAssessmentEngine:
         # Calculate record risk (max of all factors)
         record_risk = max(risk_factors) if risk_factors else 10
         
+        # 5. Check for anonymization markers to apply risk discount
+        discount = self._get_anonymization_discount(values)
+        if discount < 1.0:
+            record_risk = int(record_risk * discount)
+            # Add driver and remove conflicting high-risk drivers if heavily discounted
+            if "Risk reduced due to strong anonymization/masking" not in drivers:
+                drivers.append("Risk reduced due to strong anonymization/masking")
+        
         return record_risk, drivers
+    
+    def _get_anonymization_discount(self, values: List[Any]) -> float:
+        """Calculate a discount factor if data appears anonymized"""
+        anonymized_fields = 0
+        
+        for val in values:
+            val_str = str(val)
+            # Masking
+            if '*' in val_str or 'XXXX' in val_str or '[MASKED]' in val_str:
+                anonymized_fields += 1
+            # Pseudonyms
+            elif val_str.startswith('Person_') or val_str.startswith('District '):
+                anonymized_fields += 1
+            # Hashes (16 or 32 hex chars)
+            elif re.match(r'^[a-f0-9]{16}(\.\.\.)?$', val_str) or re.match(r'^[a-f0-9]{32}$', val_str):
+                anonymized_fields += 1
+            # Range buckets
+            elif re.match(r'^\d+-\d+$', val_str) or re.match(r'^\d+\+$', val_str):
+                anonymized_fields += 1
+        
+        if anonymized_fields == 0:
+            return 1.0
+            
+        ratio = anonymized_fields / len(values)
+        if ratio > 0.4:
+            return 0.2  # 80% risk reduction if heavily anonymized
+        elif ratio > 0.15:
+            return 0.4  # 60% reduction
+        else:
+            return 0.6  # 40% reduction
     
     def _check_uniqueness(self, values: List[Any]) -> Tuple[int, List[str]]:
         """Check if values appear unique or rare"""
