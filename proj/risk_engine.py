@@ -268,6 +268,7 @@ class RiskAssessmentEngine:
         
         # 70% weight to max, 30% to average
         combined = (max_risk * 0.7) + (avg_risk * 0.3)
+        combined = min(100, max(10, combined))
         
         # Round to nearest valid score
         valid_scores = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]

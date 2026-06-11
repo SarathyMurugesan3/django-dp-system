@@ -399,6 +399,22 @@ class PrivacyBudgetLedger:
                 self.max_epsilon
             )
             self.last_refill = now
+            
+    def spend_if_affordable(self, epsilon_cost: float, query_type: str):
+        self._apply_sliding_window_refill()
+        if self.epsilon_remaining < epsilon_cost:
+            return False, f"Insufficient budget. Remaining: {self.epsilon_remaining:.4f}"
+        self.epsilon_remaining -= epsilon_cost
+        query_id = secrets.token_hex(8)
+        self.transactions.append(PrivacyBudgetTransaction(
+            timestamp=datetime.now(),
+            query_type=query_type,
+            epsilon_cost=epsilon_cost,
+            epsilon_remaining=self.epsilon_remaining,
+            mechanism_used='LaplaceBoundedDomain',
+            query_id=query_id
+        ))
+        return True, f"Spent ε={epsilon_cost}. Remaining: {self.epsilon_remaining:.4f}"
     
     def get_degradation_factor(self) -> float:
         """Calculate noise scaling factor based on remaining budget"""
@@ -762,16 +778,15 @@ class PrivacyEngine:
         # Flaw 6: l-diversity check
         from .privacy_policies import PolicyLibrary
         policy = PolicyLibrary.get_policy(policy_name)
-        if policy and getattr(policy, 'enable_l_diversity', False):
-            quasi_ids = [col for col, info in column_classifications.items()
-                         if info.get('type') == 'quasi_identifier']
-            sensitive_cols = [col for col, info in column_classifications.items()
-                             if info.get('type') == 'sensitive']
-            if quasi_ids and sensitive_cols:
-                l_result = self.check_l_diversity(
-                    records, quasi_ids, sensitive_cols[0]
-                )
-                metadata['l_diversity_check'] = l_result
+        quasi_ids = [col for col, info in column_classifications.items()
+                     if info.get('type') == 'quasi_identifier']
+        sensitive_cols = [col for col, info in column_classifications.items()
+                         if info.get('type') == 'sensitive']
+        if policy and quasi_ids and sensitive_cols:
+            l_result = self.check_l_diversity(
+                records, quasi_ids, sensitive_cols[0]
+            )
+            metadata['l_diversity_check'] = l_result
         
         return privatized_records, metadata
     
@@ -865,7 +880,7 @@ class PrivacyEngine:
                         anonymized = self._anonymize_nested_json(parsed, config)
                         transformed.append(json.dumps(anonymized))
                     except (json.JSONDecodeError, TypeError):
-                        transformed.append(self._hash_value(str(v))[:16] + '...')
+                        transformed.append(self._hash_value(str(v))[:32])
                 else:
                     transformed.append(v)
         elif column_type == 'identifier':
@@ -1045,7 +1060,17 @@ class PrivacyEngine:
         
         epsilon_for_column = config.get_epsilon_per_column()
         if not config.allocate_epsilon(column_name, epsilon_for_column):
-            return self._bucket_values(numeric_values, num_buckets=5)
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    result.append(self._safe_numeric(raw_v))
+            bucketed = self._bucket_values(
+                [v for v in result if v is not None], num_buckets=5
+            )
+            it = iter(bucketed)
+            return [next(it) if v is not None else None for v in result]
         
         try:
             mech = LaplaceBoundedDomain(

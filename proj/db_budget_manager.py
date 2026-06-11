@@ -100,9 +100,7 @@ class DatabasePrivacyBudgetManager:
         
         # ADD THIS CHECK:
         if ledger.epsilon_remaining < epsilon_cost:
-            raise ValueError(
-                f"Insufficient budget: {ledger.epsilon_remaining:.4f} < {epsilon_cost}"
-            )
+            return ""
         
         # Deduct epsilon
         ledger.epsilon_remaining -= epsilon_cost
