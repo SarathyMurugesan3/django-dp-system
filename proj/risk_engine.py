@@ -163,7 +163,7 @@ class RiskAssessmentEngine:
                 drivers.append("Email addresses detected (direct identifiers)")
             
             # Phone number patterns
-            if re.match(r'^\+?\d{10,13}$', val_str):
+            if re.match(r'^\+?\d{10,13}(?:\.0)?$', val_str):
                 risk = max(risk, 80)
                 drivers.append("Phone numbers detected")
             
@@ -193,7 +193,7 @@ class RiskAssessmentEngine:
 
             # Aadhaar: exactly 12 digits (with or without spaces)
             aadhaar_clean = val_str.replace(' ', '')
-            if re.match(r'^\d{12}$', aadhaar_clean):
+            if re.match(r'^\d{12}(?:\.0)?$', aadhaar_clean):
                 risk = max(risk, 95)
                 if "Aadhaar-format identifier detected" not in drivers:
                     drivers.append("Aadhaar-format identifier detected")

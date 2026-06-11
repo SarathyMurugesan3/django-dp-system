@@ -143,9 +143,11 @@ def assess_and_privatize(request):
         
         "risk_score": original_score,
         "risk_level": original_risk["risk_level"],
+        "primary_risk_drivers": original_risk.get("primary_risk_drivers", []),
         
         "new_risk_score": new_score,
         "new_risk_level": new_risk["risk_level"],
+        "new_risk_drivers": new_risk.get("primary_risk_drivers", []),
         
         "risk_reduction_percent": reduction,
         
