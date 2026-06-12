@@ -24,27 +24,25 @@ budget_manager_wrapper = DatabaseBudgetWrapper()
 def execute_db_query(request):
     """
     Execute differential privacy query on database table
-    
-    New API Format:
-    {
-      "user_id": "analyst_001",
-      "table_name": "demographics",
-      "field_name": "age",
-      "query_type": "mean",
-      "filters": {
-        "age": {"operator": ">", "value": 18},
-        "state": {"operator": "=", "value": "Maharashtra"}
-      }
-    }
     """
-    user_id = request.data.get("user_id", "default")
-    table_name = request.data.get("table_name")
-    field_name = request.data.get("field_name")
-    query_type_str = request.data.get("query_type", "mean")
-    filters = request.data.get("filters", {})
-    
-    response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
-    return Response(response_data, status=status_code)
+    import traceback
+    try:
+        user_id = request.data.get("user_id", "default")
+        table_name = request.data.get("table_name")
+        field_name = request.data.get("field_name")
+        query_type_str = request.data.get("query_type", "mean")
+        filters = request.data.get("filters", {})
+
+        response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
+        return Response(response_data, status=status_code)
+    except Exception as e:
+        # Catch ALL uncaught errors and return as JSON so we can debug
+        return Response({
+            "error": "Unexpected server error",
+            "type": type(e).__name__,
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }, status=500)
 
 
 def process_db_query(user_id, table_name, field_name, query_type_str, filters):
