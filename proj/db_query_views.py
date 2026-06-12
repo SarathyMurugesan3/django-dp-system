@@ -148,15 +148,15 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
                     if isinstance(condition, dict):
                         operator = condition.get('operator', '=')
                         value = condition.get('value')
-                        where_clauses.append(f'"{field}" {operator} %s')
+                        where_clauses.append(f'`{field}` {operator} %s')
                         params.append(value)
                     else:
-                        where_clauses.append(f'"{field}" = %s')
+                        where_clauses.append(f'`{field}` = %s')
                         params.append(condition)
                 
                 where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
                 
-                sql = f'SELECT COUNT(*) FROM "{table_name}" WHERE {where_sql}'
+                sql = f'SELECT COUNT(*) FROM `{table_name}` WHERE {where_sql}'
                 with connection.cursor() as cursor:
                     cursor.execute(sql, params)
                     actual_count = cursor.fetchone()[0]
@@ -276,15 +276,6 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
     }, 200
 
 
-def get_postgres_type(value):
-    """Determine PostgreSQL type for casting"""
-    if isinstance(value, (int, float)):
-        return 'numeric'
-    elif isinstance(value, bool):
-        return 'boolean'
-    else:
-        return 'text'
-
 
 def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple:
     """
@@ -324,40 +315,42 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             
             # Check if this is a JSON field access (dataset_records table)
             if table_name.lower() == 'dataset_records' and field != 'dataset_name':
-                # JSON field access: data->>'FieldName'
-                where_clauses.append(f"(data->>%s)::{get_postgres_type(value)} {operator} %s")
-                params.append(field)
-                params.append(value)
+                # JSON field access for MySQL: JSON_UNQUOTE(JSON_EXTRACT(data, '$.FieldName'))
+                where_clauses.append(f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, %s)) AS CHAR) {operator} %s")
+                params.append(f'$.{field}')
+                params.append(str(value))
             else:
-                # Regular column
-                where_clauses.append(f'"{field}" {operator} %s')
+                # Regular column — use backticks for MySQL
+                where_clauses.append(f'`{field}` {operator} %s')
                 params.append(value)
         else:
             # Simple equality
             if table_name.lower() == 'dataset_records':
-                where_clauses.append(f"data->>%s = %s")
-                params.append(field)
+                where_clauses.append(f"JSON_UNQUOTE(JSON_EXTRACT(data, %s)) = %s")
+                params.append(f'$.{field}')
                 params.append(str(condition))
             else:
-                where_clauses.append(f'"{field}" = %s')
+                where_clauses.append(f'`{field}` = %s')
                 params.append(condition)
     
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Build SELECT clause based on table type
     if table_name.lower() == 'dataset_records':
-        # Extract from JSON column
-        select_clause = f"(data->>'{field_name}')::numeric"
+        # Extract from JSON column — MySQL syntax
+        select_clause = f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field_name}')) AS DECIMAL(20,6))"
+        null_check = f"JSON_EXTRACT(data, '$.{field_name}') IS NOT NULL"
     else:
-        # Regular column
-        select_clause = f'"{field_name}"'
+        # Regular column — use backticks for MySQL
+        select_clause = f'`{field_name}`'
+        null_check = f'`{field_name}` IS NOT NULL'
     
-    # Build SQL query
+    # Build SQL query — backtick table name for MySQL
     sql = f'''
         SELECT {select_clause}
-        FROM "{table_name}"
+        FROM `{table_name}`
         WHERE {where_sql}
-        AND {select_clause} IS NOT NULL
+        AND {null_check}
         LIMIT 10000
     '''
     
@@ -366,13 +359,14 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             cursor.execute(sql, params)
             rows = cursor.fetchall()
     except Exception as e:
-        # If JSON extraction fails, try as regular column
-        if 'does not exist' in str(e).lower() or 'cannot cast' in str(e).lower():
+        # If JSON extraction fails, try as regular column (MySQL fallback)
+        err_str = str(e).lower()
+        if 'does not exist' in err_str or 'cannot cast' in err_str or 'unknown column' in err_str:
             sql = f'''
-                SELECT "{field_name}"
-                FROM "{table_name}"
+                SELECT `{field_name}`
+                FROM `{table_name}`
                 WHERE {where_sql}
-                AND "{field_name}" IS NOT NULL
+                AND `{field_name}` IS NOT NULL
                 LIMIT 10000
             '''
             with connection.cursor() as cursor:
