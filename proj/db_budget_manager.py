@@ -317,7 +317,24 @@ class LedgerWrapper:
         return DatabasePrivacyBudgetManager.spend_budget(
             self.user_id, epsilon_cost, query_type
         )
-    
+
+    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str = "direct") -> str:
+        """
+        Deduct epsilon from budget and record transaction.
+        Returns query_id string (empty string if insufficient budget).
+        Compatible with PrivacyEngine's expected interface.
+        """
+        success, msg = DatabasePrivacyBudgetManager.spend_budget(
+            self.user_id, epsilon_cost, query_type
+        )
+        # Sync local state after deduction
+        try:
+            self.ledger_model.refresh_from_db()
+            self.epsilon_remaining = self.ledger_model.epsilon_remaining
+        except Exception:
+            pass
+        return msg if success else ""
+
     def get_degradation_factor(self) -> float:
         """Calculate noise scaling factor based on remaining budget"""
         self.ledger_model.refresh_from_db()
