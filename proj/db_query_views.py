@@ -122,6 +122,12 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
     # Step 3: Fetch data from database
     try:
         data, data_min, data_max = fetch_data_from_db(table_name, field_name, filters)
+    except ValueError as e:
+        # User input error (e.g., unknown filter column) — return 400
+        return {
+            "error": "Invalid filter",
+            "message": str(e)
+        }, 400
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
@@ -297,6 +303,26 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
         original_field = field_name
         field_name = FIELD_MAPPING[table_name.lower()].get(field_name.lower(), field_name)
     
+    # Validate filter columns against actual table schema (skip for JSON tables)
+    if filters and table_name.lower() != 'dataset_records':
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+                actual_columns = {row[0].lower() for row in cursor.fetchall()}
+            unknown_fields = [
+                f for f in filters.keys()
+                if f.lower() not in actual_columns
+            ]
+            if unknown_fields:
+                raise ValueError(
+                    f"Unknown filter column(s) {unknown_fields} in table '{table_name}'. "
+                    f"Available columns: {sorted(actual_columns)}"
+                )
+        except ValueError:
+            raise  # Re-raise our own validation error
+        except Exception:
+            pass  # If SHOW COLUMNS itself fails, let the main query fail naturally
+
     # Build WHERE clause from filters
     where_clauses = []
     params = []
@@ -357,9 +383,10 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             cursor.execute(sql, params)
             rows = cursor.fetchall()
     except Exception as e:
-        # If JSON extraction fails, try as regular column (MySQL fallback)
+        # If JSON extraction fails on the SELECT field, try as regular column.
+        # Only fall back when the error is about the SELECT field, not a WHERE filter.
         err_str = str(e).lower()
-        if 'does not exist' in err_str or 'cannot cast' in err_str or 'unknown column' in err_str:
+        if ('does not exist' in err_str or 'cannot cast' in err_str) and 'unknown column' not in err_str:
             sql = f'''
                 SELECT `{field_name}`
                 FROM `{table_name}`
