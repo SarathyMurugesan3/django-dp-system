@@ -154,11 +154,17 @@ def get_privatized_table(request):
             epsilon_remaining=10.0
         )
     
-    # Apply privacy transformations
+    # Compute actual risk score from real data before applying privacy
+    from .risk_engine import RiskAssessmentEngine
+    risk_engine = RiskAssessmentEngine()
+    risk_result = risk_engine.analyze_dataset(records)
+    actual_risk_score = risk_result["risk_score"]
+
+    # Apply privacy transformations using real risk score
     privatized_records, metadata = engine.apply_privacy(
         records=records,
         column_classifications=column_classifications,
-        risk_score=50,
+        risk_score=actual_risk_score,
         user_id=user_id
     )
     
@@ -189,6 +195,9 @@ def get_privatized_table(request):
         "record_count": len(privatized_records),
         "table": table_name,
         "filters": filters,
+        "risk_score": actual_risk_score,
+        "risk_level": risk_result["risk_level"],
+        "risk_drivers": risk_result["primary_risk_drivers"],
         "epsilon_used": 1.0,
         "epsilon_remaining": ledger.epsilon_remaining,
         "privacy_metadata": {

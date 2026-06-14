@@ -113,13 +113,13 @@ def assess_and_privatize(request):
     if save_to_db and table_name:
         try:
             with connection.cursor() as cursor:
-                # Create anonymized table if not exists
+                # Create anonymized table if not exists (MySQL-compatible)
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS anonymized_records (
-                        id SERIAL PRIMARY KEY,
+                        id INT AUTO_INCREMENT PRIMARY KEY,
                         source_table TEXT,
-                        data JSONB,
-                        created_at TIMESTAMP DEFAULT NOW()
+                        data JSON,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
 

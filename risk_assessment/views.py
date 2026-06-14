@@ -166,13 +166,14 @@ def fetch_table_data(table_name, schema='public'):
 
     with connection.cursor() as cursor:
 
-        # Validate table exists
+        # Validate table exists — use DATABASE() for MySQL compatibility
+        # (MySQL has no 'public' schema; schema = database name)
         cursor.execute("""
             SELECT EXISTS (
                 SELECT 1 FROM information_schema.tables
-                WHERE table_schema = %s AND table_name = %s
+                WHERE table_schema = DATABASE() AND table_name = %s
             );
-        """, [schema, table_name])
+        """, [table_name])
 
         exists = cursor.fetchone()[0]
 
