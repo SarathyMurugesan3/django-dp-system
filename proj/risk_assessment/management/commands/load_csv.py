@@ -25,7 +25,7 @@ class Command(BaseCommand):
         clear_data = options["clear"]
 
         if not os.path.exists(csv_file):
-            self.stdout.write("❌ File not found")
+            self.stdout.write("[ERROR] File not found")
             return
 
         if not table_name:
@@ -39,10 +39,10 @@ class Command(BaseCommand):
             raw_columns = reader.fieldnames
 
             if not raw_columns:
-                self.stdout.write("❌ No columns found")
+                self.stdout.write("[ERROR] No columns found")
                 return
 
-            # Map original column names → MySQL-safe names (backtick-escaped)
+            # Map original column names -> MySQL-safe names (backtick-escaped)
             col_map = {col: sanitize_column(col) for col in raw_columns}
             # Build column definitions using backticks (MySQL syntax)
             sql_columns = ", ".join([f"`{col_map[col]}` TEXT" for col in raw_columns])
@@ -52,7 +52,7 @@ class Command(BaseCommand):
                     # MySQL-compatible DROP TABLE uses backticks
                     cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
 
-                # Create table — MySQL syntax: INT AUTO_INCREMENT, backtick identifiers
+                # Create table -- MySQL syntax: INT AUTO_INCREMENT, backtick identifiers
                 cursor.execute(f"""
                     CREATE TABLE IF NOT EXISTS `{table_name}` (
                         `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -76,16 +76,17 @@ class Command(BaseCommand):
                         cursor.executemany(insert_sql, batch)
                         created += len(batch)
                         batch = []
-                        self.stdout.write(f"  → {created} rows inserted...", ending="\r")
+                        self.stdout.write(f"  -> {created} rows inserted...", ending="\r")
 
                 # Insert any remaining rows
                 if batch:
                     cursor.executemany(insert_sql, batch)
                     created += len(batch)
 
-        self.stdout.write(f"\n✅ Import completed")
+        self.stdout.write("")
+        self.stdout.write("[OK] Import completed")
         self.stdout.write(f"Table created: {table_name}")
         self.stdout.write(f"Rows inserted: {created}")
         self.stdout.write("Column mapping:")
         for original, safe in col_map.items():
-            self.stdout.write(f"  {original} → {safe}")
+            self.stdout.write(f"  {original} -> {safe}")
