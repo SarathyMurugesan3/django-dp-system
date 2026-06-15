@@ -7,12 +7,12 @@ from django.db import connection
 
 def sanitize_column(name):
     name = name.strip()
-    name = re.sub(r'\W+', '_', name)  # replace spaces & symbols
+    name = re.sub(r'\W+', '_', name)  # replace spaces & symbols with underscore
     return name.lower()
 
 
 class Command(BaseCommand):
-    help = "Upload CSV & CREATE PostgreSQL table dynamically (safe column names)"
+    help = "Upload CSV & CREATE MySQL table dynamically (safe column names)"
 
     def add_arguments(self, parser):
         parser.add_argument("csv_file", type=str)
@@ -30,6 +30,8 @@ class Command(BaseCommand):
 
         if not table_name:
             base = os.path.basename(csv_file).replace(".csv", "")
+            # Sanitize the table name too (remove spaces/special chars)
+            base = re.sub(r'\W+', '_', base).lower()
             table_name = f"dataset_{base}"
 
         with open(csv_file, encoding="utf-8") as f:
@@ -40,37 +42,41 @@ class Command(BaseCommand):
                 self.stdout.write("❌ No columns found")
                 return
 
-            # Map original → SQL safe
+            # Map original column names → MySQL-safe names (backtick-escaped)
             col_map = {col: sanitize_column(col) for col in raw_columns}
-            sql_columns = ", ".join([f'"{col_map[col]}" TEXT' for col in raw_columns])
+            # Build column definitions using backticks (MySQL syntax)
+            sql_columns = ", ".join([f"`{col_map[col]}` TEXT" for col in raw_columns])
 
             with connection.cursor() as cursor:
                 if clear_data:
-                    cursor.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+                    # MySQL-compatible DROP TABLE uses backticks
+                    cursor.execute(f"DROP TABLE IF EXISTS `{table_name}`")
 
-                # Create table
-                cursor.execute(f'''
-                    CREATE TABLE IF NOT EXISTS "{table_name}" (
-                        id SERIAL PRIMARY KEY,
+                # Create table — MySQL syntax: INT AUTO_INCREMENT, backtick identifiers
+                cursor.execute(f"""
+                    CREATE TABLE IF NOT EXISTS `{table_name}` (
+                        `id` INT AUTO_INCREMENT PRIMARY KEY,
                         {sql_columns}
                     )
-                ''')
+                """)
 
-                created = 0
-
+                # Prepare data for batch insertion
+                data = []
                 for row in reader:
-                    cols = [f'"{col_map[c]}"' for c in raw_columns]
-                    values = [row[c] for c in raw_columns]
+                    data.append([row[c] for c in raw_columns])
 
-                    placeholders = ", ".join(["%s"] * len(values))
-                    col_sql = ", ".join(cols)
-
-                    cursor.execute(
-                        f'INSERT INTO "{table_name}" ({col_sql}) VALUES ({placeholders})',
-                        values
+                # Use backtick-quoted column names for INSERT
+                cols = [f"`{col_map[c]}`" for c in raw_columns]
+                col_sql = ", ".join(cols)
+                placeholders = ", ".join(["%s"] * len(raw_columns))
+                
+                if data:
+                    cursor.executemany(
+                        f"INSERT INTO `{table_name}` ({col_sql}) VALUES ({placeholders})",
+                        data
                     )
 
-                    created += 1
+                created = len(data)
 
         self.stdout.write("\n✅ Import completed")
         self.stdout.write(f"Table created: {table_name}")
