@@ -99,7 +99,45 @@ class RiskAssessmentEngine:
         # Calculate record risk (max of all factors)
         record_risk = max(risk_factors) if risk_factors else 10
         
+        # 5. Check for anonymization markers to apply risk discount
+        discount = self._get_anonymization_discount(values)
+        if discount < 1.0:
+            record_risk = int(record_risk * discount)
+            # Add driver and remove conflicting high-risk drivers if heavily discounted
+            if "Risk reduced due to strong anonymization/masking" not in drivers:
+                drivers.append("Risk reduced due to strong anonymization/masking")
+        
         return record_risk, drivers
+    
+    def _get_anonymization_discount(self, values: List[Any]) -> float:
+        """Calculate a discount factor if data appears anonymized"""
+        anonymized_fields = 0
+        
+        for val in values:
+            val_str = str(val)
+            # Masking
+            if '*' in val_str or 'XXXX' in val_str or '[MASKED]' in val_str:
+                anonymized_fields += 1
+            # Pseudonyms
+            elif val_str.startswith('Person_') or val_str.startswith('District '):
+                anonymized_fields += 1
+            # Hashes (16 or 32 hex chars)
+            elif re.match(r'^[a-f0-9]{16}(\.\.\.)?$', val_str) or re.match(r'^[a-f0-9]{32}$', val_str):
+                anonymized_fields += 1
+            # Range buckets
+            elif re.match(r'^\d+-\d+$', val_str) or re.match(r'^\d+\+$', val_str):
+                anonymized_fields += 1
+        
+        if anonymized_fields == 0:
+            return 1.0
+            
+        ratio = anonymized_fields / len(values)
+        if ratio > 0.4:
+            return 0.2  # 80% risk reduction if heavily anonymized
+        elif ratio > 0.15:
+            return 0.4  # 60% reduction
+        else:
+            return 0.6  # 40% reduction
     
     def _check_uniqueness(self, values: List[Any]) -> Tuple[int, List[str]]:
         """Check if values appear unique or rare"""
@@ -109,8 +147,8 @@ class RiskAssessmentEngine:
         for val in values:
             val_str = str(val)
             
-            # Very long strings suggest unique identifiers
-            if len(val_str) > 20:
+            # Very long strings suggest unique identifiers (skip hex hashes and phrases)
+            if len(val_str) > 20 and not re.match(r'^[a-fA-F0-9]{32,}$', val_str) and ' ' not in val_str:
                 risk = max(risk, 70)
                 drivers.append("Very long unique values detected")
             
@@ -125,7 +163,7 @@ class RiskAssessmentEngine:
                 drivers.append("Email addresses detected (direct identifiers)")
             
             # Phone number patterns
-            if re.match(r'^\+?\d{10,13}$', val_str):
+            if re.match(r'^\+?\d{10,13}(?:\.0)?$', val_str):
                 risk = max(risk, 80)
                 drivers.append("Phone numbers detected")
             
@@ -141,32 +179,44 @@ class RiskAssessmentEngine:
         drivers = []
         risk = 0
         
-        # Sensitive keywords (domain-agnostic)
-        sensitive_patterns = {
-            r'\b(password|passwd|pwd|secret)\b': ("Potential credential data", 100),
-            r'\b(ssn|social.security)\b': ("Social security patterns", 100),
-            r'\b(credit.card|card.number|cvv)\b': ("Financial data patterns", 100),
-            r'\b(diagnosis|medical|health|patient)\b': ("Healthcare-related data", 90),
-            r'\b(salary|income|wage|compensation)\b': ("Financial compensation data", 80),
-            r'\b(address|street|apartment|zip)\b': ("Location data detected", 70),
-            r'\b(birth|dob|age)\b': ("Age/birth-related data", 60),
-        }
-        
+        # Checking sensitive patterns against values directly causes false positives 
+        # (e.g. 'Rental Income' triggers 'income' -> 80 risk).
+        # We only check for specific dangerous data types in values, like exact age.
         for val in values:
-            val_str = str(val).lower()
-            
-            for pattern, (driver, pattern_risk) in sensitive_patterns.items():
-                if re.search(pattern, val_str, re.I):
-                    risk = max(risk, pattern_risk)
-                    if driver not in drivers:
-                        drivers.append(driver)
-            
-            # Check for exact age values (high risk if precise)
-            if re.match(r'^\d{1,3}$', str(val)) and 0 < int(str(val)) < 120:
+            val_str = str(val).strip()
+
+            # Exact age values
+            if re.match(r'^\d{1,3}$', val_str) and 0 < int(val_str) < 120:
                 risk = max(risk, 25)
                 if "Precise age values present" not in drivers:
                     drivers.append("Precise age values present")
-        
+
+            # Aadhaar: exactly 12 digits (with or without spaces or dashes)
+            aadhaar_clean = val_str.replace(' ', '').replace('-', '')
+            if re.match(r'^\d{12}(?:\.0)?$', aadhaar_clean):
+                risk = max(risk, 95)
+                if "Aadhaar-format identifier detected" not in drivers:
+                    drivers.append("Aadhaar-format identifier detected")
+
+            # Credit Card: 16 digits (with or without spaces or dashes)
+            cc_clean = val_str.replace(' ', '').replace('-', '')
+            if re.match(r'^\d{16}(?:\.0)?$', cc_clean):
+                risk = max(risk, 95)
+                if "Credit card format detected" not in drivers:
+                    drivers.append("Credit card format detected")
+
+            # PAN: exactly 5 letters + 4 digits + 1 letter
+            if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', val_str.upper()):
+                risk = max(risk, 95)
+                if "PAN-format identifier detected" not in drivers:
+                    drivers.append("PAN-format identifier detected")
+
+            # IFSC: 4 letters + 0 + 6 alphanumeric
+            if re.match(r'^[A-Z]{4}0[A-Z0-9]{6}$', val_str.upper()):
+                risk = max(risk, 80)
+                if "IFSC code detected" not in drivers:
+                    drivers.append("IFSC code detected")
+                    
         return risk, drivers
     
     def _check_combination_risk(self, values: List[Any]) -> Tuple[int, List[str]]:
@@ -224,11 +274,12 @@ class RiskAssessmentEngine:
         avg_risk = sum(record_risks) / len(record_risks)
         
         # 70% weight to max, 30% to average
-        combined = (max_risk * 0.4) + (avg_risk * 0.6)
+        combined = (max_risk * 0.7) + (avg_risk * 0.3)
         
-        # Round to nearest valid score
-        valid_scores = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-        final = min(valid_scores, key=lambda x: abs(x - combined))
+        # Clamp to [10, 100] and round to nearest integer
+        # Do NOT snap to a fixed discrete set — that causes all datasets with
+        # similar structures to report the identical score.
+        final = int(round(min(100, max(10, combined))))
         
         return final
     

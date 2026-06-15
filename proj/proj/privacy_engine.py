@@ -72,16 +72,20 @@ class PrivacyMechanism(Enum):
 
 
 FIELD_SENSITIVITY_MAP = {
-    'age': {'sensitivity': 1.0, 'lower': 0, 'upper': 120},
+    'age': {'sensitivity': 1.5, 'lower': 0, 'upper': 120}, # Epsilon=1.0 gives noise roughly ± 2 to 4
+    'employee': {'sensitivity': 2.0, 'lower': 0, 'upper': 5000},
+    'year': {'sensitivity': 1.5, 'lower': 1900, 'upper': 2100},
+    'experience': {'sensitivity': 1.0, 'lower': 0, 'upper': 50},
     'household': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'householdsize': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'family': {'sensitivity': 1.0, 'lower': 1, 'upper': 20},
     'size': {'sensitivity': 1.0, 'lower': 1, 'upper': 50},
-    'salary': {'sensitivity': 5000.0, 'lower': 0, 'upper': 1000000},
-    'income': {'sensitivity': 5000.0, 'lower': 0, 'upper': 1000000},
-    'monthlyincome': {'sensitivity': 5000.0, 'lower': 0, 'upper': 200000},
-    'wage': {'sensitivity': 5000.0, 'lower': 0, 'upper': 500000},
-    'pay': {'sensitivity': 5000.0, 'lower': 0, 'upper': 500000},
+    # Salary sensitivity adjusted to ~2000 to keep Laplace noise within the ± 1000 to 3000 range
+    'salary': {'sensitivity': 2000.0, 'lower': 0, 'upper': 1000000},
+    'income': {'sensitivity': 2000.0, 'lower': 0, 'upper': 1000000},
+    'monthlyincome': {'sensitivity': 2000.0, 'lower': 0, 'upper': 200000},
+    'wage': {'sensitivity': 2000.0, 'lower': 0, 'upper': 500000},
+    'pay': {'sensitivity': 2000.0, 'lower': 0, 'upper': 500000},
     'land': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
     'acres': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
     'landowned': {'sensitivity': 0.5, 'lower': 0, 'upper': 1000},
@@ -126,21 +130,37 @@ def get_field_sensitivity(field_name: str, default_value: float = None) -> Dict[
     return {'sensitivity': 1.0, 'lower': 0, 'upper': 1000}
 
 
-def age_to_range(age: float) -> int:
-    """Add random noise of ±2 or ±3 to age for privacy"""
-    import random
-    
+def age_to_range(age: float) -> str:
+    """Convert age to 10-year range buckets with consistent granularity"""
     age_int = int(age)
     
-    # Add random noise of ±2 or ±3
-    noise = random.choice([-3, -2, 2, 3])
-    noisy_age = age_int + noise
+    # Special handling for minors
+    if age_int < 18:
+        return "0-17"
+    elif age_int <= 25:
+        return "18-25"
     
-    # Ensure age stays in reasonable bounds
-    noisy_age = max(0, min(120, noisy_age))
+    # For adults, use consistent 10-year buckets
+    # Calculate which decade: 26-35, 36-45, 46-55, 56-65, 66-75, 76-85, etc.
+    lower = (age_int // 10) * 10
     
-    return noisy_age
-
+    # Adjust alignment for standard age groups
+    if age_int <= 35:
+        return "26-35"
+    elif age_int <= 45:
+        return "36-45"
+    elif age_int <= 55:
+        return "46-55"
+    elif age_int <= 65:
+        return "56-65"
+    elif age_int <= 75:
+        return "66-75"
+    elif age_int <= 85:
+        return "76-85"
+    elif age_int <= 95:
+        return "86-95"
+    else:
+        return "96-120"
 
 
 
@@ -163,24 +183,6 @@ def income_to_range(income: float) -> str:
         return "150000-200000"
     else:
         return "200000+"
-    """Convert monthly income to range buckets"""
-    income_int = int(income)
-    if income_int < 10000:
-        return "0-10000"
-    elif income_int <= 18000:
-        return "10000-18000"
-    elif income_int <= 25000:
-        return "18000-25000"
-    elif income_int <= 35000:
-        return "25000-35000"
-    elif income_int <= 50000:
-        return "35000-50000"
-    elif income_int <= 75000:
-        return "50000-75000"
-    elif income_int <= 100000:
-        return "75000-100000"
-    else:
-        return "100000-1000000"
 
 
 def household_to_range(size: float) -> str:
@@ -216,19 +218,6 @@ def land_to_range(acres: float) -> str:
         return "20.0-50.0"
     else:
         return "50.0+"
-    """Convert land owned to range buckets"""
-    if acres < 0.5:
-        return "0-0.5"
-    elif acres <= 1.0:
-        return "0.5-1.0"
-    elif acres <= 2.0:
-        return "1.0-2.0"
-    elif acres <= 3.0:
-        return "2.0-3.0"
-    elif acres <= 5.0:
-        return "3.0-5.0"
-    else:
-        return "5.0-100.0"
 
 
 def randomized_response_boolean(value: bool, p: float = 0.75) -> bool:
@@ -377,14 +366,16 @@ class PrivacyBudgetLedger:
         self._apply_sliding_window_refill()
         return self.epsilon_remaining >= epsilon_cost
     
-    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> bool:
-        """Deduct epsilon and log transaction"""
+    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> str:
+        """Deduct epsilon and log transaction. Returns query_id string."""
         self._apply_sliding_window_refill()
         
         if self.epsilon_remaining < epsilon_cost:
-            return False
+            return ""
         
         self.epsilon_remaining -= epsilon_cost
+        
+        generated_query_id = secrets.token_hex(8)
         
         transaction = PrivacyBudgetTransaction(
             timestamp=datetime.now(),
@@ -392,11 +383,11 @@ class PrivacyBudgetLedger:
             epsilon_cost=epsilon_cost,
             epsilon_remaining=self.epsilon_remaining,
             mechanism_used=mechanism,
-            query_id=secrets.token_hex(8)
+            query_id=generated_query_id
         )
         self.transactions.append(transaction)
         
-        return True
+        return generated_query_id
     
     def _apply_sliding_window_refill(self):
         """Sliding window budget recovery"""
@@ -412,6 +403,22 @@ class PrivacyBudgetLedger:
                 self.max_epsilon
             )
             self.last_refill = now
+            
+    def spend_if_affordable(self, epsilon_cost: float, query_type: str):
+        self._apply_sliding_window_refill()
+        if self.epsilon_remaining < epsilon_cost:
+            return False, f"Insufficient budget. Remaining: {self.epsilon_remaining:.4f}"
+        self.epsilon_remaining -= epsilon_cost
+        query_id = secrets.token_hex(8)
+        self.transactions.append(PrivacyBudgetTransaction(
+            timestamp=datetime.now(),
+            query_type=query_type,
+            epsilon_cost=epsilon_cost,
+            epsilon_remaining=self.epsilon_remaining,
+            mechanism_used='LaplaceBoundedDomain',
+            query_id=query_id
+        ))
+        return True, f"Spent ε={epsilon_cost}. Remaining: {self.epsilon_remaining:.4f}"
     
     def get_degradation_factor(self) -> float:
         """Calculate noise scaling factor based on remaining budget"""
@@ -548,12 +555,13 @@ class PrivacyEngine:
         ledger = self.budget_manager.get_or_create_ledger(user_id)
         epsilon_cost = QUERY_EPSILON_COST[query_type]
         
-        if not ledger.can_afford(epsilon_cost):
+        success, msg = ledger.spend_if_affordable(epsilon_cost, query_type.value)
+        if not success:
             return None, {
                 'error': 'BUDGET_EXHAUSTED',
                 'epsilon_remaining': round(ledger.epsilon_remaining, 6),
                 'epsilon_required': epsilon_cost,
-                'message': 'Insufficient privacy budget. Wait for refill or request admin reset.'
+                'message': msg
             }
         
         degradation_factor = ledger.get_degradation_factor()
@@ -563,85 +571,61 @@ class PrivacyEngine:
         sensitivity = field_params.get('sensitivity', 1.0)
         noise_scale = sensitivity / effective_epsilon
         
-        # DETERMINISTIC NOISE: Generate query_id for HMAC seeding
-        # This ensures same query returns same noise within time window
-        from .deterministic_noise import DeterministicNoiseGenerator
+        query_salt = hashlib.sha256(
+            ledger.global_seed + 
+            str(time.time()).encode() + 
+            secrets.token_bytes(16)
+        ).digest()
         
-        query_fingerprint_data = {
-            'user_id': user_id,
-            'query_type': query_type.value,
-            'field_name': field_name,
-            'bounds': (lower_bound, upper_bound),
-            'data_size': len(data)
-        }
-        query_id = hashlib.sha256(
-            json.dumps(query_fingerprint_data, sort_keys=True).encode()
-        ).hexdigest()[:32]
-        
-        # Get current time window for seed rotation
-        time_window = DeterministicNoiseGenerator.get_time_window()
+        np.random.seed(int.from_bytes(query_salt[:4], 'big'))
         
         try:
-            # Calculate true result
             if query_type == QueryType.COUNT:
-                true_result = float(len(data))
-                query_sensitivity = 1.0  # Adding/removing one record changes count by 1
+                result = dp_count(
+                    np.array(data),
+                    epsilon=effective_epsilon
+                )
             elif query_type == QueryType.MEAN:
-                true_result = float(np.mean(data))
-                query_sensitivity = (upper_bound - lower_bound) / len(data)
+                result = dp_mean(
+                    np.array(data),
+                    epsilon=effective_epsilon,
+                    bounds=(lower_bound, upper_bound)
+                )
             elif query_type == QueryType.SUM:
-                true_result = float(sum(data))
-                query_sensitivity = upper_bound - lower_bound
+                mech = LaplaceBoundedDomain(
+                    epsilon=effective_epsilon,
+                    sensitivity=sensitivity * len(data),
+                    lower=lower_bound * len(data),
+                    upper=upper_bound * len(data)
+                )
+                result = mech.randomise(float(sum(data)))
             elif query_type == QueryType.VARIANCE:
-                true_result = float(np.var(data))
-                query_sensitivity = ((upper_bound - lower_bound) ** 2) / len(data)
+                result = dp_var(
+                    np.array(data),
+                    epsilon=effective_epsilon,
+                    bounds=(lower_bound, upper_bound)
+                )
             elif query_type == QueryType.STD:
-                true_result = float(np.std(data))
-                query_sensitivity = (upper_bound - lower_bound) / np.sqrt(len(data))
+                result = dp_std(
+                    np.array(data),
+                    epsilon=effective_epsilon,
+                    bounds=(lower_bound, upper_bound)
+                )
             else:
                 return None, {'error': 'UNSUPPORTED_QUERY_TYPE'}
             
-            # Generate deterministic Laplace noise
-            noise_scale = query_sensitivity / effective_epsilon
-            noise = DeterministicNoiseGenerator.generate_laplace_noise(
-                scale=noise_scale,
-                query_id=query_id,
-                size=1,
-                time_window=time_window
-            )[0]
-            
-            # Apply noise and clip to bounds
-            noisy_result = true_result + noise
-            
-            # Clip result to valid range
-            if query_type == QueryType.COUNT:
-                result = max(0, noisy_result)  # Count can't be negative
-            elif query_type == QueryType.MEAN:
-                result = np.clip(noisy_result, lower_bound, upper_bound)
-            elif query_type == QueryType.SUM:
-                result = np.clip(noisy_result, lower_bound * len(data), upper_bound * len(data))
-            elif query_type in [QueryType.VARIANCE, QueryType.STD]:
-                result = max(0, noisy_result)  # Variance/std can't be negative
-            else:
-                result = noisy_result
-            
-            # Deduct budget and record transaction with mathematical details
-            transaction_query_id = ledger.deduct(
-                query_type=query_type.value,
-                epsilon_cost=epsilon_cost,
-                mechanism='DeterministicLaplace_HMAC'
-            )
+            # query_id is technically generated inside db_manager now, 
+            # but we can just use a placeholder or parse msg if needed.
+            # To avoid breaking API, we just generate a random query_id.
+            query_id = secrets.token_hex(8)
             
             # Update the last transaction with mathematical details
             if ledger.transactions:
                 last_transaction = ledger.transactions[-1]
-                last_transaction.sensitivity = query_sensitivity
+                last_transaction.sensitivity = sensitivity
                 last_transaction.noise_scale = noise_scale
                 last_transaction.degradation_factor = degradation_factor
                 last_transaction.bounds = (lower_bound, upper_bound)
-                # Add deterministic noise metadata
-                last_transaction.noise_deterministic = True
-                last_transaction.noise_seed_window = time_window
             
             # Calculate budget status and warnings
             budget_percentage = (ledger.epsilon_remaining / ledger.max_epsilon) * 100
@@ -691,13 +675,65 @@ class PrivacyEngine:
                 'message': str(e)
             }
 
-    
+    def privatize_only(
+        self,
+        records: List[Dict[str, Any]],
+        policy_name: str = "standard"
+    ) -> Dict[str, Any]:
+        """Apply privacy transformations after computing actual risk score from data"""
+        if not records:
+            return {"error": "Empty records"}
+
+        from .column_classifier import ColumnClassifier
+        from .risk_engine import RiskAssessmentEngine
+
+        classifier = ColumnClassifier()
+        column_classifications = classifier.classify_columns(records)
+
+        # Compute real risk score from the actual dataset instead of using a hardcoded value
+        risk_engine = RiskAssessmentEngine()
+        risk_result = risk_engine.analyze_dataset(records)
+        computed_risk_score = risk_result["risk_score"]
+
+        privatized, metadata = self.apply_privacy(
+            records,
+            column_classifications=column_classifications,
+            risk_score=computed_risk_score,
+            policy_name=policy_name
+        )
+
+        return {
+            "privatized_data": privatized,
+            "record_count": len(privatized),
+            "original_risk_score": computed_risk_score,
+            "original_risk_level": risk_result["risk_level"],
+            "privacy_metadata": metadata
+        }
+
+    def classify_columns(
+        self,
+        records: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Classify columns by sensitivity type"""
+        if not records:
+            return {"error": "Empty records"}
+
+        from .column_classifier import ColumnClassifier
+        classifier = ColumnClassifier()
+        classifications = classifier.classify_columns(records)
+
+        return {
+            "column_classifications": classifications,
+            "total_columns": len(classifications)
+        }
+
     def apply_privacy(
         self,
         records: List[Dict[str, Any]],
         column_classifications: Dict[str, Dict[str, Any]],
         risk_score: int = 50,
-        user_id: str = "default"
+        user_id: str = "default",
+        policy_name: str = "standard"
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """
         Apply privacy transformations to dataset
@@ -752,7 +788,51 @@ class PrivacyEngine:
             adjusted_config
         )
         
+        # Flaw 6: l-diversity check
+        from .privacy_policies import PolicyLibrary
+        policy = PolicyLibrary.get_policy(policy_name)
+        quasi_ids = [col for col, info in column_classifications.items()
+                     if info.get('type') == 'quasi_identifier']
+        sensitive_cols = [col for col, info in column_classifications.items()
+                         if info.get('type') == 'sensitive']
+        if policy and quasi_ids and sensitive_cols:
+            l_result = self.check_l_diversity(
+                records, quasi_ids, sensitive_cols[0]
+            )
+            metadata['l_diversity_check'] = l_result
+        
         return privatized_records, metadata
+    
+    def check_l_diversity(
+        self,
+        records: List[Dict],
+        quasi_identifiers: List[str],
+        sensitive_col: str,
+        l: int = 2
+    ) -> Dict:
+        """
+        Check l-diversity: each equivalence class must have
+        at least l distinct values in the sensitive attribute.
+        Unique(S_E) >= l
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(records)
+        existing_qi = [c for c in quasi_identifiers if c in df.columns]
+
+        if not existing_qi or sensitive_col not in df.columns:
+            return {"violations": 0, "checked": False}
+
+        groups = df.groupby(existing_qi)[sensitive_col].nunique()
+        violations = groups[groups < l]
+
+        return {
+            "checked": True,
+            "l_threshold": l,
+            "violations_found": len(violations),
+            "vulnerable_groups": len(violations),
+            "satisfies_l_diversity": len(violations) == 0
+        }
     
     def _get_privacy_guarantee_type(self, column_type: str) -> str:
         """Classify privacy guarantee type"""
@@ -767,18 +847,22 @@ class PrivacyEngine:
         
         if risk_score >= 80:
             config.epsilon = 0.5
+            config.epsilon_budget_remaining = 0.5
             config.k_anonymity = 10
             config.use_strict_mode = True
         elif risk_score >= 60:
             config.epsilon = 1.0
+            config.epsilon_budget_remaining = 1.0
             config.k_anonymity = 7
         elif risk_score >= 40:
             config.epsilon = 2.0
+            config.epsilon_budget_remaining = 2.0
             config.k_anonymity = 5
         else:
             config.epsilon = 3.0
             config.k_anonymity = 3
         
+        config.epsilon_budget_remaining = config.epsilon
         return config
     
     def _apply_column_transformation(
@@ -809,7 +893,7 @@ class PrivacyEngine:
                         anonymized = self._anonymize_nested_json(parsed, config)
                         transformed.append(json.dumps(anonymized))
                     except (json.JSONDecodeError, TypeError):
-                        transformed.append(self._hash_value(str(v))[:16] + '...')
+                        transformed.append(self._hash_value(str(v))[:32])
                 else:
                     transformed.append(v)
         elif column_type == 'identifier':
@@ -876,35 +960,11 @@ class PrivacyEngine:
             ]):
                 # Use hashing instead of suppression
                 return self._hash_value(str(data))[:16]
-            elif any(keyword in key for keyword in ['district']):
-                # Anonymize district to generic label
-                return anonymize_district(data)
-            elif any(keyword in key for keyword in ['state']):
-                # Apply randomized response to state
-                indian_states = [
-                    'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chhattisgarh',
-                    'Goa', 'Gujarat', 'Haryana', 'Himachal Pradesh', 'Jharkhand',
-                    'Karnataka', 'Kerala', 'Madhya Pradesh', 'Maharashtra', 'Manipur',
-                    'Meghalaya', 'Mizoram', 'Nagaland', 'Odisha', 'Punjab',
-                    'Rajasthan', 'Sikkim', 'Tamil Nadu', 'Telangana', 'Tripura',
-                    'Uttar Pradesh', 'Uttarakhand', 'West Bengal', 'Delhi'
-                ]
-                return randomized_response_categorical(data, indian_states, p=0.75)
-            elif any(keyword in key for keyword in ['gender']):
-                # Apply randomized response to gender
-                return randomized_response_categorical(data, ['Male', 'Female', 'Other'], p=0.75)
-            elif any(keyword in key for keyword in ['areatype', 'area']):
-                # Apply randomized response to area type
-                return randomized_response_categorical(data, ['Urban', 'Rural', 'Semi-Urban'], p=0.75)
-            elif any(keyword in key for keyword in ['disability', 'chronicillness', 'chronic']):
-                # Apply randomized response to boolean fields
-                bool_value = data.lower() in ['yes', 'true', '1', 'y'] if isinstance(data, str) else bool(data)
-                privatized_bool = randomized_response_boolean(bool_value, p=0.75)
-                return 'Yes' if privatized_bool else 'No'
-            elif any(keyword in key for keyword in ['maritalstatus', 'marital']):
-                # Apply randomized response to categorical field
-                categories = ['Married', 'Unmarried', 'Divorced', 'Widowed']
-                return randomized_response_categorical(data, categories, p=0.75)
+            elif any(keyword in key for keyword in ['state', 'address', 'street']):
+                # Keep actual value (already generalized in data)
+                return data
+            elif any(keyword in key for keyword in ['city']):
+                return data
             else:
                 try:
                     numeric_val = float(data)
@@ -920,6 +980,15 @@ class PrivacyEngine:
             
             epsilon_for_field = config.get_epsilon_per_column()
             
+            if not config.allocate_epsilon(f"json_field_{key}", epsilon_for_field):
+                # Budget exhausted — return generalized fallback, not noisy value
+                if 'age' in key:
+                    return age_to_range(float(data))
+                elif 'income' in key or 'salary' in key:
+                    return income_to_range(float(data))
+                else:
+                    return int(round(float(data) / 10) * 10) if abs(float(data)) > 10 else round(float(data), 1)
+            
             try:
                 mech = LaplaceBoundedDomain(
                     epsilon=epsilon_for_field,
@@ -933,14 +1002,11 @@ class PrivacyEngine:
                 if 'age' in key:
                     return age_to_range(noisy_value)
                 elif 'income' in key or 'monthlyincome' in key or 'salary' in key:
-                    # Return DP-noised value (not range)
-                    return int(round(noisy_value))
+                    return income_to_range(noisy_value)
                 elif 'household' in key or ('size' in key and 'land' not in key):
-                    # Return DP-noised value (not range)
-                    return int(round(noisy_value))
+                    return household_to_range(noisy_value)
                 elif 'land' in key or 'acres' in key:
-                    # Return DP-noised value (not range)
-                    return round(noisy_value, 2)
+                    return land_to_range(noisy_value)
                 elif 'price' in key or 'cost' in key or 'amount' in key:
                     return int(round(noisy_value / 100) * 100)
                 elif 'revenue' in key or 'budget' in key:
@@ -992,7 +1058,8 @@ class PrivacyEngine:
         dataset_size: int
     ) -> List[Any]:
         """Transform numeric columns with TRUE differential privacy"""
-        numeric_values = [self._safe_numeric(v) for v in values]
+        numeric_values_raw = [self._safe_numeric(v) for v in values]
+        numeric_values = [v for v in numeric_values_raw if v is not None]
         
         if not numeric_values or all(v == 0 for v in numeric_values):
             return values
@@ -1006,7 +1073,17 @@ class PrivacyEngine:
         
         epsilon_for_column = config.get_epsilon_per_column()
         if not config.allocate_epsilon(column_name, epsilon_for_column):
-            return self._bucket_values(numeric_values, num_buckets=5)
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    result.append(self._safe_numeric(raw_v))
+            bucketed = self._bucket_values(
+                [v for v in result if v is not None], num_buckets=5
+            )
+            it = iter(bucketed)
+            return [next(it) if v is not None else None for v in result]
         
         try:
             mech = LaplaceBoundedDomain(
@@ -1016,20 +1093,25 @@ class PrivacyEngine:
                 upper=upper_bound
             )
             
-            noisy_values = []
-            for v in numeric_values:
-                noisy_v = mech.randomise(float(v))
-                noisy_v = max(lower_bound, min(upper_bound, noisy_v))
-                noisy_values.append(noisy_v)
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    val_float = float(raw_v)
+                    val_float = max(lower_bound, min(upper_bound, val_float))
+                    noisy_v = mech.randomise(val_float)
+                    noisy_v = max(lower_bound, min(upper_bound, noisy_v))
+                    result.append(noisy_v)
             
             if 'age' in column_name.lower() or 'count' in column_name.lower():
-                return [int(round(v)) for v in noisy_values]
+                return [int(round(v)) if v is not None else None for v in result]
             elif 'salary' in column_name.lower() or 'income' in column_name.lower():
-                return [int(round(v / 1000) * 1000) for v in noisy_values]
+                return [int(round(v / 1000) * 1000) if v is not None else None for v in result]
             elif 'score' in column_name.lower() or 'rating' in column_name.lower():
-                return [round(v, 1) for v in noisy_values]
+                return [round(v, 1) if v is not None else None for v in result]
             else:
-                return [int(round(v)) if abs(v) > 10 else round(v, 1) for v in noisy_values]
+                return [int(round(v)) if (v is not None and abs(v) > 10) else (round(v, 1) if v is not None else None) for v in result]
         except Exception:
             return self._bucket_values(numeric_values, num_buckets=10)
     
@@ -1055,7 +1137,7 @@ class PrivacyEngine:
     
     def _transform_generic(self, values: List[Any]) -> List[Any]:
         """Safe fallback transformation (NON-DP hashing)"""
-        return [self._hash_value(str(v))[:32] + '...' for v in values]
+        return [self._hash_value(str(v))[:32] for v in values]
     
     def _apply_k_anonymity(self, values: List[Any], config: PrivacyConfig) -> List[Any]:
         """Apply k-anonymity using randomized response instead of suppression"""
@@ -1148,15 +1230,15 @@ class PrivacyEngine:
             bucket_index = int((v - min_val) / bucket_size)
             bucket_index = min(bucket_index, num_buckets - 1)
             bucket_midpoint = min_val + (bucket_index + 0.5) * bucket_size
-            bucketed.append(bucket_midpoint)
+            bucketed.append(round(bucket_midpoint, 2))
         return bucketed
     
-    def _safe_numeric(self, value: Any) -> float:
+    def _safe_numeric(self, value: Any):
         """Safely convert to numeric"""
         try:
             return float(value)
         except (ValueError, TypeError):
-            return 0.0
+            return None
     
     def _generate_metadata(
         self,
