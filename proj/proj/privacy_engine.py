@@ -1202,8 +1202,14 @@ class PrivacyEngine:
     
     def _safe_numeric(self, value: Any):
         """Safely convert to numeric"""
-        try:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
             return float(value)
+        # Clean string: remove $, commas, spaces
+        val_str = str(value).replace('$', '').replace(',', '').strip()
+        try:
+            return float(val_str)
         except (ValueError, TypeError):
             return None
     
