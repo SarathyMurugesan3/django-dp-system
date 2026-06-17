@@ -1049,11 +1049,13 @@ class PrivacyEngine:
     @staticmethod
     def _is_currency_field(column_name: str) -> bool:
         """Return True for monetary / large-scale numeric fields."""
+        # NOTE: 'dept' is NOT included (it means 'department', not 'debt').
+        # 'debt' is included for debt/expenditure tracking fields.
         keywords = [
             'salary', 'income', 'wage', 'pay', 'price', 'cost', 'amount',
             'revenue', 'budget', 'funding', 'expenditure', 'loan', 'emi',
             'savings', 'monthlyincome', 'fee', 'charge', 'tax',
-            'dept', 'debt', 'exp', 'cons', 'ern'
+            'debt', 'exp', 'cons', 'ern'
         ]
         col_lower = column_name.lower()
         return any(kw in col_lower for kw in keywords)
@@ -1063,17 +1065,24 @@ class PrivacyEngine:
         Add a randomly chosen offset from the fixed noise pool.
         Currency fields use the currency pool; all other integers use the
         small-integer pool.  Result is always rounded to int.
-        
-        Negative values in non-currency fields are kept as-is (e.g. special classification codes like -1, -2).
+
+        Rules:
+        - Negative values in NON-currency fields → kept as-is (e.g. classification codes -1, -2).
+        - Currency fields allow negative results (e.g. negative balances).
+        - Non-currency positive values: result is clamped to >= 0 to prevent
+          fields like age from going negative due to noise.
         """
         if value < 0 and not self._is_currency_field(column_name):
+            # Preserve special negative codes (e.g. -1 = 'Not Applicable') without noise
             return int(round(value))
 
         if self._is_currency_field(column_name):
             offset = int(np.random.choice(self._CURRENCY_NOISE_POOL))
+            return int(round(value)) + offset
         else:
             offset = int(np.random.choice(self._INTEGER_NOISE_POOL))
-        return int(round(value)) + offset
+            # Clamp to 0 minimum so positive counts/ages never go negative due to noise
+            return max(0, int(round(value)) + offset)
 
     def _transform_numeric(
         self,
