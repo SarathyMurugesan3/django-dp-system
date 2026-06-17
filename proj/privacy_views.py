@@ -463,42 +463,37 @@ def upload_and_anonymize_file(request):
         sanitized_name = re.sub(r'\W+', '_', base_name).lower()
         table_name = f"dataset_{sanitized_name}"
         
-    # Read the file content
-    try:
-        content_bytes = uploaded_file.read()
-    except Exception as e:
-        return Response({"error": f"Failed to read file: {str(e)}"}, status=400)
-        
-    records = []
+    # Helper to stream decoded lines line-by-line
+    def get_decoded_lines(file_obj):
+        for line_bytes in file_obj:
+            try:
+                yield line_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                yield line_bytes.decode("latin-1", errors="replace")
+
+    lines_iter = get_decoded_lines(uploaded_file)
     headers = []
+    reader = None
+    first_line = ""
     
     # Check if CSV or text (FWF)
     if filename_lower.endswith(".csv"):
         # Parse CSV
+        reader = csv.DictReader(lines_iter)
         try:
-            decoded_content = content_bytes.decode("utf-8", errors="replace")
-        except Exception:
-            decoded_content = content_bytes.decode("latin-1", errors="replace")
-            
-        csv_file = io.StringIO(decoded_content)
-        reader = csv.DictReader(csv_file)
-        headers = reader.fieldnames
+            headers = reader.fieldnames
+        except Exception as e:
+            return Response({"error": f"Failed to parse CSV headers: {str(e)}"}, status=400)
         if not headers:
             return Response({"error": "Empty CSV or no headers found"}, status=400)
-            
-        for row in reader:
-            clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
-            records.append(clean_row)
     else:
         # Parse Fixed-Width Text File (PLFS)
-        try:
-            decoded_content = content_bytes.decode("latin-1", errors="replace")
-        except Exception:
-            decoded_content = content_bytes.decode("utf-8", errors="replace")
-            
-        lines = decoded_content.splitlines()
-        if not lines:
-            return Response({"error": "Empty text file"}, status=400)
+        # Fetch the first non-empty line for layout detection and start of data
+        while not first_line.strip():
+            try:
+                first_line = next(lines_iter)
+            except StopIteration:
+                return Response({"error": "Empty text file"}, status=400)
             
         # Determine PLFS layout (HH or PER)
         from risk_assessment.management.commands.plfs_convert import HOUSEHOLD_LAYOUT, PERSON_LAYOUT
@@ -510,12 +505,6 @@ def upload_and_anonymize_file(request):
             layout = PERSON_LAYOUT
         else:
             # Auto-detect by checking line length of first non-empty line
-            first_line = ""
-            for line in lines:
-                if line.strip():
-                    first_line = line
-                    break
-            
             if len(first_line) >= 200:
                 layout = PERSON_LAYOUT
                 plfs_type = "PER"
@@ -526,24 +515,25 @@ def upload_and_anonymize_file(request):
         headers = [col[0] for col in layout]
         slices = [(col[1] - 1, col[2]) for col in layout]
         
-        for line in lines:
-            raw = line.rstrip("\r\n")
+        def process_line(line_str):
+            raw = line_str.rstrip("\r\n")
             if not raw:
-                continue
+                return None
             row = {}
             for (start, end), header in zip(slices, headers):
                 if start >= len(raw):
                     row[header] = ""
                 else:
                     row[header] = raw[start:end].strip()
-            records.append(row)
+            return row
             
-    if not records:
-        return Response({"error": "No records parsed from the file"}, status=400)
-        
-    # Save parsed records to DB as structured table
+    records_count = 0
+    privacy_sample = []
+    PRIVACY_SAMPLE_SIZE = 500
+    
     db_saved = False
     db_error = None
+    
     try:
         col_map = get_safe_columns(headers)
         sql_columns = ", ".join([f"`{col_map[col]}` TEXT" for col in headers])
@@ -557,32 +547,77 @@ def upload_and_anonymize_file(request):
                     {sql_columns}
                 )
             """)
+        db_setup_success = True
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to setup database table: {str(e)}")
+        db_setup_success = False
+        db_error = str(e)
+        
+    # Stream and process rows
+    try:
+        if filename_lower.endswith(".csv"):
+            rows_iterator = reader
+        else:
+            def fwf_iterator():
+                first_row = process_line(first_line)
+                if first_row:
+                    yield first_row
+                for line in lines_iter:
+                    r = process_line(line)
+                    if r:
+                        yield r
+            rows_iterator = fwf_iterator()
             
-            # Batch insert
+        if db_setup_success:
             cols_sql = ", ".join([f"`{col_map[c]}`" for c in headers])
             placeholders = ", ".join(["%s"] * len(headers))
             insert_sql = f"INSERT INTO `{table_name}` ({cols_sql}) VALUES ({placeholders})"
             
             BATCH_SIZE = 500
             batch = []
-            for row in records:
-                batch.append(tuple(row.get(c, "") for c in headers))
-                if len(batch) >= BATCH_SIZE:
+            
+            with connection.cursor() as cursor:
+                for row in rows_iterator:
+                    if filename_lower.endswith(".csv"):
+                        clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
+                    else:
+                        clean_row = row
+                        
+                    records_count += 1
+                    if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
+                        privacy_sample.append(clean_row)
+                        
+                    batch.append(tuple(clean_row.get(c, "") for c in headers))
+                    if len(batch) >= BATCH_SIZE:
+                        cursor.executemany(insert_sql, batch)
+                        batch = []
+                if batch:
                     cursor.executemany(insert_sql, batch)
-                    batch = []
-            if batch:
-                cursor.executemany(insert_sql, batch)
-        db_saved = True
+            db_saved = True
+        else:
+            # DB setup failed, just parse the sample and count records without database insert
+            for row in rows_iterator:
+                if filename_lower.endswith(".csv"):
+                    clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
+                else:
+                    clean_row = row
+                records_count += 1
+                if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
+                    privacy_sample.append(clean_row)
     except Exception as e:
         import logging
-        logging.getLogger(__name__).error(f"Failed to save uploaded file to database: {str(e)}")
-        db_error = str(e)
+        logging.getLogger(__name__).error(f"Failed to stream uploaded file: {str(e)}")
+        if not db_error:
+            db_error = str(e)
+        db_saved = False
+        
+    if not privacy_sample:
+        return Response({"error": "No records parsed from the file"}, status=400)
         
     # Run Privacy Engine on a sample to avoid timeout on large files
     # Full data is already saved to DB; privacy analysis runs on sample
-    PRIVACY_SAMPLE_SIZE = 500
-    privacy_sample = records[:PRIVACY_SAMPLE_SIZE]
-    is_sampled = len(records) > PRIVACY_SAMPLE_SIZE
+    is_sampled = records_count > PRIVACY_SAMPLE_SIZE
 
     try:
         # Analyze risk before (on sample)
@@ -620,13 +655,13 @@ def upload_and_anonymize_file(request):
             "table_name": table_name if db_saved else None,
             "db_saved": db_saved,
             "db_error": db_error,
-            "record_count": len(records),
+            "record_count": records_count,
             "error_details": str(e)
         }, status=200)
         
     message = "File uploaded, parsed, and anonymized successfully."
     if is_sampled:
-        message += f" (Privacy report based on first {PRIVACY_SAMPLE_SIZE} of {len(records)} records; full data saved to DB.)"
+        message += f" (Privacy report based on first {PRIVACY_SAMPLE_SIZE} of {records_count} records; full data saved to DB.)"
     if db_saved:
         message += " Saved to database."
     else:
@@ -637,7 +672,7 @@ def upload_and_anonymize_file(request):
         "table_name": table_name if db_saved else None,
         "db_saved": db_saved,
         "db_error": db_error,
-        "record_count": len(records),
+        "record_count": records_count,
         "privacy_sample_size": len(privacy_sample),
         "policy_used": policy_name,
         "plfs_detected_type": plfs_type if not filename_lower.endswith(".csv") else None,
