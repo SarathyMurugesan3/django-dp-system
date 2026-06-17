@@ -153,7 +153,7 @@ class PolicyLibrary:
             transform_identifiers=True,
             transform_quasi_identifiers=True,
             add_noise_to_numeric=True,
-            generalize_categorical=False,  # Keep categories intact
+            generalize_categorical=False,
             redact_sensitive=True,
             preserve_statistical_properties=True,
             utility_weight=0.7
