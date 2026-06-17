@@ -528,7 +528,7 @@ def upload_and_anonymize_file(request):
             return row
             
     records_count = 0
-    privacy_sample = []
+    all_records = []
     PRIVACY_SAMPLE_SIZE = 500
     
     db_saved = False
@@ -587,8 +587,7 @@ def upload_and_anonymize_file(request):
                                 clean_row = row
                                 
                             records_count += 1
-                            if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
-                                privacy_sample.append(clean_row)
+                            all_records.append(clean_row)
                                 
                             batch.append(tuple(clean_row.get(c, "") for c in headers))
                             if len(batch) >= BATCH_SIZE:
@@ -603,15 +602,14 @@ def upload_and_anonymize_file(request):
                 db_saved = False
                 db_error = str(e)
         else:
-            # DB setup failed, just parse the sample and count records without database insert
+            # DB setup failed, just parse and count records without database insert
             for row in rows_iterator:
                 if filename_lower.endswith(".csv"):
                     clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
                 else:
                     clean_row = row
                 records_count += 1
-                if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
-                    privacy_sample.append(clean_row)
+                all_records.append(clean_row)
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"Failed to stream uploaded file: {str(e)}")
@@ -619,32 +617,30 @@ def upload_and_anonymize_file(request):
             db_error = str(e)
         db_saved = False
         
-    if not privacy_sample:
+    if not all_records:
         return Response({"error": "No records parsed from the file"}, status=400)
         
-    # Run Privacy Engine on a sample to avoid timeout on large files
-    # Full data is already saved to DB; privacy analysis runs on sample
-    is_sampled = records_count > PRIVACY_SAMPLE_SIZE
-
     try:
-        # Analyze risk before (on sample)
+        # Analyze risk before on the entire dataset (samples internally)
         risk_engine = RiskAssessmentEngine()
-        original_risk = risk_engine.analyze_dataset(privacy_sample)
+        original_risk = risk_engine.analyze_dataset(all_records)
         
-        # Apply privacy (on sample)
+        # Classify columns using a sample of 500 records for speed & accuracy
         from .column_classifier import ColumnClassifier
         classifier = ColumnClassifier()
-        column_classifications = classifier.classify_columns(privacy_sample)
+        sample_for_classification = all_records[:PRIVACY_SAMPLE_SIZE]
+        column_classifications = classifier.classify_columns(sample_for_classification)
         
+        # Apply privacy on the ENTIRE dataset (all_records)
         privacy_engine = PrivacyEngine()
         anonymized_records, privacy_metadata = privacy_engine.apply_privacy(
-            privacy_sample,
+            all_records,
             column_classifications=column_classifications,
             risk_score=original_risk["risk_score"],
             policy_name=policy_name
         )
         
-        # Analyze risk after
+        # Analyze risk after on the entire anonymized dataset (samples internally)
         new_risk = risk_engine.analyze_anonymized_dataset(
             anonymized_records,
             privacy_metadata
@@ -666,9 +662,7 @@ def upload_and_anonymize_file(request):
             "error_details": str(e)
         }, status=200)
         
-    message = "File uploaded, parsed, and anonymized successfully."
-    if is_sampled:
-        message += f" (Privacy report based on first {PRIVACY_SAMPLE_SIZE} of {records_count} records; full data saved to DB.)"
+    message = f"File uploaded, parsed, and anonymized successfully. (All {records_count} records processed.)"
     if db_saved:
         message += " Saved to database."
     else:
@@ -680,7 +674,7 @@ def upload_and_anonymize_file(request):
         "db_saved": db_saved,
         "db_error": db_error,
         "record_count": records_count,
-        "privacy_sample_size": len(privacy_sample),
+        "privacy_sample_size": len(all_records),
         "policy_used": policy_name,
         "plfs_detected_type": plfs_type if not filename_lower.endswith(".csv") else None,
         
@@ -694,9 +688,9 @@ def upload_and_anonymize_file(request):
         
         "risk_reduction_percent": reduction,
         
-        # Preview of original + privatized data (from sample)
-        "original_data_preview": privacy_sample[:50],
-        "privatized_data": anonymized_records[:50],
+        # Preview of original + full privatized data (returning all anonymized records)
+        "original_data_preview": all_records[:50],
+        "privatized_data": anonymized_records,
         
         "privacy_metadata": privacy_metadata
     }, status=200)
