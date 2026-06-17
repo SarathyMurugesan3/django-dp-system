@@ -360,6 +360,16 @@ class RiskAssessmentEngine:
                     if driver not in drivers:
                         drivers.append(driver)
 
+            if any(term in field_str for term in ['id', 'uuid', 'hash', 'key', 'token']):
+                if any(safe in field_str for safe in ['file', 'system', 'record', 'sl', 'line']):
+                    hits.append(15)
+                    if "Internal sequence ID present" not in drivers:
+                        drivers.append("Internal sequence ID present")
+                elif not self._is_anonymized_value(val_str_raw):
+                    hits.append(65)
+                    if "Direct identifiers present" not in drivers:
+                        drivers.append("Direct identifiers present")
+
             if re.match(r'^\d{1,3}$', str(val)) and 0 < int(str(val)) < 120:
                 hits.append(25)
                 if "Precise age values present" not in drivers:
@@ -372,10 +382,10 @@ class RiskAssessmentEngine:
         risk       = 0
         num_values = len(values)
         if num_values >= 15:
-            risk = max(risk, 50)
+            risk = max(risk, 40)
             drivers.append(f"High attribute count ({num_values} fields) increases re-identification risk")
         elif num_values >= 8:
-            risk = max(risk, 35)
+            risk = max(risk, 25)
             drivers.append(f"Multiple attributes ({num_values} fields) enable linking attacks")
         elif num_values >= 4:
             risk = max(risk, 20)

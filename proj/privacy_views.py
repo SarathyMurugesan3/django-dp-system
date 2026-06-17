@@ -31,7 +31,8 @@ def assess_and_privatize(request):
     if schema not in ALLOWED_SCHEMAS:
         return Response({"error": f"Invalid schema. Allowed: {list(ALLOWED_SCHEMAS)}"}, status=400)
     
-    save_to_db = request.data.get("save_to_db", False)
+    save_to_db_val = request.data.get("save_to_db", False)
+    save_to_db = str(save_to_db_val).lower() == 'true'
 
     # Load DB table if requested
     if table_name:
@@ -330,7 +331,11 @@ def anonymization_proof(request):
     """
     policy_name = request.data.get("policy", "standard")
     table_name = request.data.get("table_name")
-    limit = int(request.data.get("limit", 5))
+    limit_val = request.data.get("limit", 5)
+    try:
+        limit = int(limit_val)
+    except (TypeError, ValueError):
+        limit = 5
         
     if not table_name:
         return Response({"error": "table_name is required"}, status=400)
