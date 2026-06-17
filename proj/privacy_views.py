@@ -42,9 +42,8 @@ def assess_and_privatize(request):
             
         try:
             with connection.cursor() as cursor:
-                quoted_schema = connection.ops.quote_name(schema)
                 quoted_table_name = connection.ops.quote_name(table_name)
-                cursor.execute(f'SELECT * FROM {quoted_schema}.{quoted_table_name} LIMIT 500;')
+                cursor.execute(f'SELECT * FROM {quoted_table_name} LIMIT 500;')
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchall()
 
@@ -59,7 +58,7 @@ def assess_and_privatize(request):
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"Table fetch failed: {str(e)}")
-            return Response({"error": "Table fetch failed"}, status=500)
+            return Response({"error": f"Table fetch failed: {str(e)}"}, status=400)
 
     if not records:
         return Response({"error": "records or table_name required"}, status=400)
