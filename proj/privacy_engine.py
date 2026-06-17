@@ -746,10 +746,27 @@ class PrivacyEngine:
         
         adjusted_config = self._adjust_config_by_risk(risk_score)
         
-        numeric_count = sum(
-            1 for c in column_classifications.values()
-            if c.get('type') in ['numeric', 'quasi_identifier']
-        )
+        # Count columns that will be transformed as numeric
+        numeric_count = 0
+        for col_name, c in column_classifications.items():
+            col_type = c.get('type')
+            if col_type in ['numeric', 'quasi_identifier']:
+                numeric_count += 1
+            elif col_type in ['sensitive', 'generic', 'identifier']:
+                column_values = [record.get(col_name) for record in records]
+                non_null_values = [v for v in column_values if v is not None]
+                non_empty_values = [v for v in non_null_values if str(v).strip() != ""]
+                is_numeric = False
+                if non_empty_values:
+                    try:
+                        numeric_count_values = sum(1 for v in non_empty_values[:10] if self._safe_numeric(v) is not None)
+                        if (numeric_count_values / len(non_empty_values[:10])) >= 0.8:
+                            is_numeric = True
+                    except:
+                        pass
+                if is_numeric or self._is_currency_field(col_name):
+                    numeric_count += 1
+                    
         adjusted_config.num_numeric_columns_estimate = max(1, numeric_count)
         
         privatized_records = [record.copy() for record in records]
@@ -880,6 +897,18 @@ class PrivacyEngine:
         
         if not non_null_values:
             return values
+
+        # Check if the column is actually numeric/currency to prevent incorrect hashing/masking
+        is_numeric_column = False
+        if column_type in ['sensitive', 'generic', 'identifier', 'quasi_identifier']:
+            non_empty_values = [v for v in non_null_values if str(v).strip() != ""]
+            if non_empty_values:
+                numeric_count = sum(1 for v in non_empty_values if self._safe_numeric(v) is not None)
+                if (numeric_count / len(non_empty_values)) >= 0.8:
+                    is_numeric_column = True
+                    
+            if is_numeric_column or self._is_currency_field(column_name):
+                column_type = 'numeric'
         
         if column_name == 'data':
             transformed = []
@@ -1021,7 +1050,8 @@ class PrivacyEngine:
         keywords = [
             'salary', 'income', 'wage', 'pay', 'price', 'cost', 'amount',
             'revenue', 'budget', 'funding', 'expenditure', 'loan', 'emi',
-            'savings', 'monthlyincome', 'fee', 'charge', 'tax'
+            'savings', 'monthlyincome', 'fee', 'charge', 'tax',
+            'dept', 'debt', 'exp', 'cons', 'ern'
         ]
         col_lower = column_name.lower()
         return any(kw in col_lower for kw in keywords)
@@ -1031,7 +1061,12 @@ class PrivacyEngine:
         Add a randomly chosen offset from the fixed noise pool.
         Currency fields use the currency pool; all other integers use the
         small-integer pool.  Result is always rounded to int.
+        
+        Negative values in non-currency fields are kept as-is (e.g. special classification codes like -1, -2).
         """
+        if value < 0 and not self._is_currency_field(column_name):
+            return int(round(value))
+
         if self._is_currency_field(column_name):
             offset = int(np.random.choice(self._CURRENCY_NOISE_POOL))
         else:

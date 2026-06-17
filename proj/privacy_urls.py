@@ -10,7 +10,8 @@ from .privacy_views import (
     validate_policy,
     compare_policies,
     trigger_guardian_from_hacker,
-    anonymization_proof
+    anonymization_proof,
+    upload_and_anonymize_file
 )
 from .dp_query_views import (
     execute_dp_query,
@@ -47,6 +48,7 @@ urlpatterns = [
     path('policies/validate/', validate_policy),
     path('policies/compare/', compare_policies),
     path('trigger-guardian/', trigger_guardian_from_hacker),
+    path('upload-file/', upload_and_anonymize_file),
 
     # ShadowSafe-Style Budget System Endpoints
     path('dp-query/', execute_dp_query),

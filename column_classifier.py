@@ -220,7 +220,7 @@ class ColumnClassifier:
     def _classify_by_name(self, column_name: str) -> Dict[str, Any]:
         """Classify based on column name semantic analysis"""
         
-        column_name_lower = column_name.lower()
+        column_name_lower = column_name.lower().replace('_', ' ')
         
         # Check each category
         for category, info in self.name_patterns.items():
@@ -263,6 +263,10 @@ class ColumnClassifier:
             if match_ratio > 0.8:  # High confidence
                 pattern_matches[pattern_name] = match_ratio
         
+        # Resolve priority conflicts: date/time patterns take precedence over phone numbers
+        if 'date_iso' in pattern_matches or 'timestamp' in pattern_matches:
+            pattern_matches.pop('phone', None)
+            
         # If we have pattern matches, classify accordingly
         if pattern_matches:
             top_pattern = max(pattern_matches.items(), key=lambda x: x[1])
