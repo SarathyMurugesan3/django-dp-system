@@ -121,8 +121,8 @@ class RiskAssessmentEngine:
             # Pseudonyms
             elif val_str.startswith('Person_') or val_str.startswith('District '):
                 anonymized_fields += 1
-            # Hashes (16 or 32 hex chars)
-            elif re.match(r'^[a-f0-9]{16}(\.\.\.)?$', val_str) or re.match(r'^[a-f0-9]{32}$', val_str):
+            # Hashes (hex strings of various lengths, often used to match original length)
+            elif re.match(r'^[a-fA-F0-9]{6,64}$', val_str) and not val_str.isdigit():
                 anonymized_fields += 1
             # Range buckets
             elif re.match(r'^\d+-\d+$', val_str) or re.match(r'^\d+\+$', val_str):
@@ -148,7 +148,7 @@ class RiskAssessmentEngine:
             val_str = str(val)
             
             # Very long strings suggest unique identifiers (skip hex hashes and phrases)
-            if len(val_str) > 20 and not re.match(r'^[a-fA-F0-9]{32,}$', val_str) and ' ' not in val_str:
+            if len(val_str) > 20 and not (re.match(r'^[a-fA-F0-9]{6,64}$', val_str) and not val_str.isdigit()) and ' ' not in val_str:
                 risk = max(risk, 70)
                 drivers.append("Very long unique values detected")
             

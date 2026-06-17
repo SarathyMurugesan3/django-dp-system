@@ -893,7 +893,7 @@ class PrivacyEngine:
                         anonymized = self._anonymize_nested_json(parsed, config)
                         transformed.append(json.dumps(anonymized))
                     except (json.JSONDecodeError, TypeError):
-                        transformed.append(self._hash_value(str(v))[:32])
+                        transformed.append(self._hash_value(str(v))[:len(str(v))])
                 else:
                     transformed.append(v)
         elif column_type == 'identifier':
@@ -958,8 +958,8 @@ class PrivacyEngine:
                 'national', 'nationalid', 'voter', 'voterid',
                 'uid', 'uniqueid', 'personid', 'customerid'
             ]):
-                # Use hashing instead of suppression
-                return self._hash_value(str(data))[:16]
+                # Use hashing instead of suppression, preserving original length
+                return self._hash_value(str(data))[:len(str(data))]
             elif any(keyword in key for keyword in ['state', 'address', 'street']):
                 # Keep actual value (already generalized in data)
                 return data
@@ -980,8 +980,8 @@ class PrivacyEngine:
     
     def _transform_identifier(self, values: List[Any], sensitivity: str, config: PrivacyConfig) -> List[Any]:
         """Transform direct identifiers (NON-DP hashing)"""
-        # Always use hashing, never redaction
-        return [self._hash_value(str(v))[:32] for v in values]
+        # Always use hashing, never redaction. Preserve original length.
+        return [self._hash_value(str(v))[:len(str(v))] for v in values]
     
     def _transform_quasi_identifier(
         self,
@@ -1099,12 +1099,12 @@ class PrivacyEngine:
     
     def _transform_sensitive(self, values: List[Any], sensitivity: str) -> List[Any]:
         """Transform sensitive data (NON-DP hashing)"""
-        # Always use hashing, never redaction
-        return [self._hash_value(str(v))[:32] for v in values]
+        # Always use hashing, never redaction. Preserve original length.
+        return [self._hash_value(str(v))[:len(str(v))] for v in values]
     
     def _transform_generic(self, values: List[Any]) -> List[Any]:
         """Safe fallback transformation (NON-DP hashing)"""
-        return [self._hash_value(str(v))[:32] for v in values]
+        return [self._hash_value(str(v))[:len(str(v))] for v in values]
     
     def _apply_k_anonymity(self, values: List[Any], config: PrivacyConfig) -> List[Any]:
         """Apply k-anonymity using randomized response instead of suppression"""
