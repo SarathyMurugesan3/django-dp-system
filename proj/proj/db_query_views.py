@@ -1,8 +1,7 @@
 """
-Database Query Endpoint with Query Fingerprinting
+Database Query Endpoint
 
-Allows users to query database tables with DP protection and
-detects repeated queries to prevent privacy leakage.
+Allows users to query database tables with DP protection.
 """
 
 from rest_framework.decorators import api_view
@@ -10,8 +9,6 @@ from rest_framework.response import Response
 from django.db import connection
 from .privacy_engine import PrivacyEngine, QueryType
 from .db_budget_manager import DatabaseBudgetWrapper
-from .query_fingerprinting import QueryFingerprint, FingerprintMatcher
-from .query_fingerprint_models import QueryFingerprintModel
 from django.utils import timezone
 import numpy as np
 
@@ -63,63 +60,17 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
             "valid_types": ["count", "mean", "sum", "variance", "std"]
         }, 400
     
-    # Step 1: Create query fingerprint
-    current_fingerprint = QueryFingerprint(
-        table_name=table_name,
-        field_name=field_name,
-        query_type=query_type_str,
-        filters=filters
-    )
-    
-    # Step 2: Check for similar queries in history (including team members)
-    # Get user's team_id
+    # Get user's team_id for metadata
     from .privacy_budget_models import PrivacyBudgetLedger as LedgerModel
     try:
         user_ledger = LedgerModel.objects.get(user_id=user_id)
         team_id = user_ledger.team_id
     except LedgerModel.DoesNotExist:
         team_id = None
-    
-    # Build query to check user's history AND team members' history
-    if team_id:
-        # Get all team members
-        team_members = LedgerModel.objects.filter(team_id=team_id).values_list('user_id', flat=True)
         
-        # Check queries from ALL team members (cross-user detection)
-        history = QueryFingerprintModel.objects.filter(
-            user_id__in=team_members  # ← Check entire team!
-        ).order_by('-timestamp')[:200].values(
-            'user_id', 'table_name', 'field_name', 'query_type', 
-            'filters_json', 'timestamp'
-        )
-    else:
-        # No team - only check user's own history
-        history = QueryFingerprintModel.objects.filter(
-            user_id=user_id
-        ).order_by('-timestamp')[:100].values(
-            'user_id', 'table_name', 'field_name', 'query_type', 
-            'filters_json', 'timestamp'
-        )
+    budget_multiplier = 1.0
     
-    history_list = [
-        {
-            'user_id': h['user_id'],  # Track which user made the query
-            'table_name': h['table_name'],
-            'field_name': h['field_name'],
-            'query_type': h['query_type'],
-            'filters': h['filters_json'],
-            'timestamp': h['timestamp']
-        }
-        for h in history
-    ]
-    
-    budget_multiplier, similar_queries = FingerprintMatcher.find_similar_queries(
-        current_fingerprint,
-        history_list,
-        time_window_hours=24
-    )
-    
-    # Step 3: Fetch data from database
+    # Fetch data from database
     try:
         data, data_min, data_max = fetch_data_from_db(table_name, field_name, filters)
     except ValueError as e:
@@ -185,7 +136,7 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
             "suggestion": "Use 'recordid' as field_name for numeric queries, or use query_type='count' for categorical fields"
         }, 400
     
-    # Step 4: Auto-detect bounds from data
+    # Auto-detect bounds from data
     if query_type == QueryType.COUNT:
         lower_bound = 0
         upper_bound = data_max * 1.1
@@ -193,7 +144,7 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
         lower_bound = float(data_min) - (data_max - data_min) * 0.1
         upper_bound = float(data_max) + (data_max - data_min) * 0.1
     
-    # Step 5: Execute DP query with budget multiplier
+    # Execute DP query with budget multiplier
     engine = PrivacyEngine(budget_manager=budget_manager_wrapper)
     
     # Get base epsilon
@@ -215,68 +166,17 @@ def process_db_query(user_id, table_name, field_name, query_type_str, filters):
     if result is None:
         return metadata, 429
     
-    # Step 6: Adjust budget if multiplier > 1.0
-    if budget_multiplier > 1.0:
-        # Deduct additional epsilon
-        ledger = budget_manager_wrapper.get_or_create_ledger(user_id)
-        additional_cost = base_epsilon_cost * (budget_multiplier - 1.0)
-        ledger.deduct(
-            query_type=f"{query_type_str}_penalty",
-            epsilon_cost=additional_cost,
-            mechanism="QuerySimilarityPenalty"
-        )
-    
-    # Step 7: Store query fingerprint
-    QueryFingerprintModel.objects.create(
-        user_id=user_id,
-        table_name=table_name,
-        field_name=field_name,
-        query_type=query_type_str,
-        fingerprint_hash=current_fingerprint.fingerprint_hash,
-        filters_json=current_fingerprint.filters,
-        epsilon_cost=base_epsilon_cost,
-        budget_multiplier=budget_multiplier,
-        effective_cost=effective_epsilon_cost,
-        result_value=result,
-        timestamp=timezone.now()
-    )
-    
-    # Step 8: Add fingerprinting metadata to response
+    # Add metadata to response
     metadata['budget_multiplier'] = budget_multiplier
     metadata['base_epsilon_cost'] = base_epsilon_cost
     metadata['effective_epsilon_cost'] = round(effective_epsilon_cost, 6)
-    metadata['similar_queries_detected'] = len(similar_queries)
     metadata['data_points'] = len(data)
     metadata['data_range'] = [round(data_min, 2), round(data_max, 2)]
     metadata['team_id'] = team_id
     
-    # Detect cross-user queries
-    cross_user_detected = any(sq.get('user_id') != user_id for sq in similar_queries if 'user_id' in sq)
-    metadata['cross_user_detection'] = cross_user_detected
-    
-    # Add warning if similar queries detected
-    if budget_multiplier > 1.0:
-        if cross_user_detected:
-            # Teammate made similar query
-            if budget_multiplier >= 5.0:
-                metadata['warning'] = f"🚨 CRITICAL: Your teammate made a nearly identical query! Budget cost increased {budget_multiplier}x. Coordinated queries can leak private information."
-            elif budget_multiplier >= 3.0:
-                metadata['warning'] = f"⚠️ Your teammate made a very similar query. Budget cost increased {budget_multiplier}x to prevent coordinated privacy leakage."
-            else:
-                metadata['warning'] = f"⚠️ Similar query detected from your team. Budget cost increased {budget_multiplier}x."
-        else:
-            # User's own similar query
-            if budget_multiplier >= 5.0:
-                metadata['warning'] = f"🚨 CRITICAL: Nearly identical query detected! Budget cost increased {budget_multiplier}x. Repeated queries with slight variations can leak private information."
-            elif budget_multiplier >= 3.0:
-                metadata['warning'] = f"⚠️ Very similar query detected. Budget cost increased {budget_multiplier}x to prevent privacy leakage."
-            else:
-                metadata['warning'] = f"⚠️ Similar query detected. Budget cost increased {budget_multiplier}x."
-    
     return {
         "result": result,
         "metadata": metadata,
-        "similar_queries": similar_queries if len(similar_queries) > 0 else None
     }, 200
 
 
@@ -430,25 +330,22 @@ def get_query_history(request, user_id):
     
     Shows all queries with fingerprints and budget multipliers
     """
-    history = QueryFingerprintModel.objects.filter(
-        user_id=user_id
-    ).order_by('-timestamp')[:50]
-    
-    history_data = [
-        {
-            'timestamp': q.timestamp.isoformat(),
-            'table': q.table_name,
-            'field': q.field_name,
-            'query_type': q.query_type,
-            'filters': q.filters_json,
-            'epsilon_cost': q.epsilon_cost,
-            'budget_multiplier': q.budget_multiplier,
-            'effective_cost': q.effective_cost,
-            'result': q.result_value
-        }
-        for q in history
-    ]
-    
+    from .privacy_budget_models import PrivacyBudgetLedger
+    try:
+        ledger = PrivacyBudgetLedger.objects.get(user_id=user_id)
+        history = ledger.transactions.all().order_by('-timestamp')[:50]
+        history_data = [
+            {
+                'timestamp': q.timestamp.isoformat(),
+                'query_type': q.query_type,
+                'epsilon_cost': q.epsilon_cost,
+                'mechanism': q.mechanism_used,
+            }
+            for q in history
+        ]
+    except PrivacyBudgetLedger.DoesNotExist:
+        history_data = []
+        
     return Response({
         'user_id': user_id,
         'total_queries': len(history_data),
