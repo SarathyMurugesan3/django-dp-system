@@ -9,7 +9,8 @@ from .privacy_views import (
     list_policies,
     validate_policy,
     compare_policies,
-    trigger_guardian_from_hacker
+    trigger_guardian_from_hacker,
+    anonymization_proof
 )
 from .dp_query_views import (
     execute_dp_query,
@@ -38,6 +39,7 @@ from .team_views import create_team, join_team, get_team_members, leave_team
 from .privatized_table_views import get_privatized_table
 
 urlpatterns = [
+    path('anonymization-proof/', anonymization_proof),
     path('assess-and-privatize/', assess_and_privatize),
     path('privatize/', privatize_only),
     path('classify/', classify_columns),

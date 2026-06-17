@@ -93,7 +93,30 @@ def assess_and_privatize(request):
     # ==========================
     # STEP 3 — RISK AFTER
     # ==========================
-    new_risk = risk_engine.analyze_dataset(anonymized_records)
+    # Determine DP parameters actually used so the post-privacy risk
+    # assessment can apply a correct, analytically-motivated discount
+    # instead of re-scoring the noisy integers at face value.
+    privacy_config_used = privacy_metadata.get("privacy_config", {})
+    epsilon_used = privacy_config_used.get("epsilon_total")
+
+    # Count how many columns received DP noise vs non-DP anonymization
+    transformations = privacy_metadata.get("transformations", {})
+    dp_col_count = sum(
+        1 for info in transformations.values()
+        if info.get("privacy_guarantee") == "DIFFERENTIAL_PRIVACY"
+    )
+    anon_col_count = sum(
+        1 for info in transformations.values()
+        if info.get("privacy_guarantee") == "NON_DP_ANONYMIZATION"
+    )
+
+    new_risk = risk_engine.analyze_dataset(
+        anonymized_records,
+        dp_applied=(dp_col_count > 0),
+        dp_epsilon=epsilon_used,
+        dp_column_count=dp_col_count,
+        anonymization_applied=(anon_col_count > 0),
+    )
 
     # ==========================
     # STEP 4 — RISK REDUCTION %
@@ -297,4 +320,80 @@ def trigger_guardian_from_hacker(request):
             "privacy_config", {}).get("epsilon_remaining", "unknown"),
         "escalations": metadata.get("columns_escalated_to_review", []),
         "record_count": len(patched_records)
+    })
+
+# =========================
+# PROOF: ORIGINAL VS ANONYMIZED
+# =========================
+@api_view(["POST"])
+def anonymization_proof(request):
+    """
+    Returns a side-by-side comparison of the original dataset vs the anonymized dataset
+    to prove that the privacy transformations are working correctly.
+    """
+    policy_name = request.data.get("policy", "standard")
+    table_name = request.data.get("table_name")
+    limit = int(request.data.get("limit", 5))
+        
+    if not table_name:
+        return Response({"error": "table_name is required"}, status=400)
+        
+    import re
+    if not re.match(r'^[a-zA-Z0-9_]+$', table_name):
+        return Response({"error": "Invalid table or schema name"}, status=400)
+
+    try:
+        with connection.cursor() as cursor:
+            quoted_table_name = connection.ops.quote_name(table_name)
+            cursor.execute(f'SELECT * FROM {quoted_table_name} LIMIT {limit};')
+            columns = [col[0] for col in cursor.description]
+            rows = cursor.fetchall()
+            records = [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Table fetch failed: {str(e)}")
+        return Response({"error": f"Table fetch failed: {str(e)}"}, status=500)
+
+    if not records:
+        return Response({"error": "No records found in table"}, status=404)
+
+    # Make a deep copy to keep original untouched
+    import copy
+    original_records = copy.deepcopy(records)
+
+    # Classify Columns
+    from .column_classifier import ColumnClassifier
+    classifier = ColumnClassifier()
+    column_classifications = classifier.classify_columns(records)
+
+    # Pre-Privacy Risk
+    risk_engine = RiskAssessmentEngine()
+    initial_risk = risk_engine.analyze_dataset(records)
+
+    # Apply Privacy
+    engine = PrivacyEngine()
+    anonymized_records, privacy_metadata = engine.apply_privacy(
+        records,
+        column_classifications,
+        risk_score=initial_risk["risk_score"],
+        policy_name=policy_name
+    )
+
+    # Pair them up
+    proof = []
+    for orig, anon in zip(original_records, anonymized_records):
+        proof.append({
+            "original": orig,
+            "anonymized": anon
+        })
+
+    return Response({
+        "table_name": table_name,
+        "policy_applied": policy_name,
+        "proof": proof,
+        "risk_reduction": {
+            "original_risk_score": initial_risk["risk_score"],
+            "original_risk_level": initial_risk["risk_level"]
+        },
+        "metadata": privacy_metadata
     })
