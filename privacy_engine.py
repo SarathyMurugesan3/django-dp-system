@@ -680,33 +680,24 @@ class PrivacyEngine:
         records: List[Dict[str, Any]],
         policy_name: str = "standard"
     ) -> Dict[str, Any]:
-        """Apply privacy transformations after computing actual risk score from data"""
+        """Apply privacy transformations without risk assessment"""
         if not records:
             return {"error": "Empty records"}
 
         from .column_classifier import ColumnClassifier
-        from .risk_engine import RiskAssessmentEngine
-
         classifier = ColumnClassifier()
         column_classifications = classifier.classify_columns(records)
-
-        # Compute real risk score from the actual dataset instead of using a hardcoded value
-        risk_engine = RiskAssessmentEngine()
-        risk_result = risk_engine.analyze_dataset(records)
-        computed_risk_score = risk_result["risk_score"]
 
         privatized, metadata = self.apply_privacy(
             records,
             column_classifications=column_classifications,
-            risk_score=computed_risk_score,
+            risk_score=50,
             policy_name=policy_name
         )
 
         return {
             "privatized_data": privatized,
             "record_count": len(privatized),
-            "original_risk_score": computed_risk_score,
-            "original_risk_level": risk_result["risk_level"],
             "privacy_metadata": metadata
         }
 
@@ -973,8 +964,53 @@ class PrivacyEngine:
                 except (ValueError, TypeError):
                     return data
         elif isinstance(data, (int, float)):
-            # Apply fixed discrete noise: ±{1,2,3} for integers, ±{500..1500} for currency
-            return self._add_discrete_noise(float(data), key)
+            field_params = get_field_sensitivity(key, data)
+            sensitivity = field_params['sensitivity']
+            lower_bound = field_params['lower']
+            upper_bound = field_params['upper']
+            
+            epsilon_for_field = config.get_epsilon_per_column()
+            
+            if not config.allocate_epsilon(f"json_field_{key}", epsilon_for_field):
+                # Budget exhausted — return generalized fallback, not noisy value
+                if 'age' in key:
+                    return age_to_range(float(data))
+                elif 'income' in key or 'salary' in key:
+                    return income_to_range(float(data))
+                else:
+                    return int(round(float(data) / 10) * 10) if abs(float(data)) > 10 else round(float(data), 1)
+            
+            try:
+                mech = LaplaceBoundedDomain(
+                    epsilon=epsilon_for_field,
+                    sensitivity=sensitivity,
+                    lower=lower_bound,
+                    upper=upper_bound
+                )
+                noisy_value = mech.randomise(float(data))
+                noisy_value = max(lower_bound, min(upper_bound, noisy_value))
+                
+                if 'age' in key:
+                    return age_to_range(noisy_value)
+                elif 'income' in key or 'monthlyincome' in key or 'salary' in key:
+                    return income_to_range(noisy_value)
+                elif 'household' in key or ('size' in key and 'land' not in key):
+                    return household_to_range(noisy_value)
+                elif 'land' in key or 'acres' in key:
+                    return land_to_range(noisy_value)
+                elif 'price' in key or 'cost' in key or 'amount' in key:
+                    return int(round(noisy_value / 100) * 100)
+                elif 'revenue' in key or 'budget' in key:
+                    return int(round(noisy_value / 10000) * 10000)
+                elif 'score' in key or 'rating' in key or 'percent' in key:
+                    return round(noisy_value, 1)
+                else:
+                    if abs(noisy_value) < 100:
+                        return round(noisy_value, 1)
+                    else:
+                        return int(round(noisy_value))
+            except Exception:
+                return int(round(data)) if isinstance(data, (int, float)) else data
         else:
             return data
     
@@ -1005,39 +1041,6 @@ class PrivacyEngine:
         else:
             return self._apply_k_anonymity(values, config)
     
-    # ---------------------------------------------------------------------------
-    # FIXED DISCRETE NOISE POOLS
-    # Integers (age, employees, count, etc.)  → offset drawn from ±{1,2,3}
-    # Currency / amounts (salary, income, price, revenue, etc.)
-    #                                          → offset drawn from ±{500,600,700,1000,1500}
-    # These pools NEVER change — do not modify without explicit approval.
-    # ---------------------------------------------------------------------------
-    _INTEGER_NOISE_POOL  = [-3, -2, -1, 1, 2, 3]
-    _CURRENCY_NOISE_POOL = [-1500, -1000, -700, -600, -500, 500, 600, 700, 1000, 1500]
-
-    @staticmethod
-    def _is_currency_field(column_name: str) -> bool:
-        """Return True for monetary / large-scale numeric fields."""
-        keywords = [
-            'salary', 'income', 'wage', 'pay', 'price', 'cost', 'amount',
-            'revenue', 'budget', 'funding', 'expenditure', 'loan', 'emi',
-            'savings', 'monthlyincome', 'fee', 'charge', 'tax'
-        ]
-        col_lower = column_name.lower()
-        return any(kw in col_lower for kw in keywords)
-
-    def _add_discrete_noise(self, value: float, column_name: str) -> int:
-        """
-        Add a randomly chosen offset from the fixed noise pool.
-        Currency fields use the currency pool; all other integers use the
-        small-integer pool.  Result is always rounded to int.
-        """
-        if self._is_currency_field(column_name):
-            offset = int(np.random.choice(self._CURRENCY_NOISE_POOL))
-        else:
-            offset = int(np.random.choice(self._INTEGER_NOISE_POOL))
-        return int(round(value)) + offset
-
     def _transform_numeric(
         self,
         values: List[Any],
@@ -1045,42 +1048,63 @@ class PrivacyEngine:
         config: PrivacyConfig,
         dataset_size: int
     ) -> List[Any]:
-        """
-        Transform numeric columns using FIXED DISCRETE NOISE.
-
-        Rules (do not change):
-          - Regular integers (age, employees, count …) → original ± {1,2,3}
-          - Currency / amount fields                  → original ± {500,600,700,1000,1500}
-          - Score / rating / percent                  → rounded to 1 dp, no noise
-        """
+        """Transform numeric columns with TRUE differential privacy"""
         numeric_values_raw = [self._safe_numeric(v) for v in values]
         numeric_values = [v for v in numeric_values_raw if v is not None]
-
+        
         if not numeric_values or all(v == 0 for v in numeric_values):
             return values
-
-        # Allocate epsilon (budget tracking) — still required for audit trail
+        
+        sample_value = next((v for v in numeric_values if v != 0), 0)
+        field_params = get_field_sensitivity(column_name, sample_value)
+        
+        sensitivity = field_params['sensitivity']
+        lower_bound = field_params['lower']
+        upper_bound = field_params['upper']
+        
         epsilon_for_column = config.get_epsilon_per_column()
         if not config.allocate_epsilon(column_name, epsilon_for_column):
-            # Budget exhausted — return original integers unchanged (safe fallback)
-            return [int(round(v)) if v is not None else None for v in numeric_values_raw]
-
-        result = []
-        for raw_v in numeric_values_raw:
-            if raw_v is None:
-                result.append(None)
-                continue
-
-            val = float(raw_v)
-
-            if 'score' in column_name.lower() or 'rating' in column_name.lower() or 'percent' in column_name.lower():
-                # Scores: keep as-is, just round to 1 dp
-                result.append(round(val, 1))
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    result.append(self._safe_numeric(raw_v))
+            bucketed = self._bucket_values(
+                [v for v in result if v is not None], num_buckets=5
+            )
+            it = iter(bucketed)
+            return [next(it) if v is not None else None for v in result]
+        
+        try:
+            mech = LaplaceBoundedDomain(
+                epsilon=epsilon_for_column,
+                sensitivity=sensitivity,
+                lower=lower_bound,
+                upper=upper_bound
+            )
+            
+            result = []
+            for raw_v in numeric_values_raw:
+                if raw_v is None:
+                    result.append(None)
+                else:
+                    val_float = float(raw_v)
+                    val_float = max(lower_bound, min(upper_bound, val_float))
+                    noisy_v = mech.randomise(val_float)
+                    noisy_v = max(lower_bound, min(upper_bound, noisy_v))
+                    result.append(noisy_v)
+            
+            if 'age' in column_name.lower() or 'count' in column_name.lower():
+                return [int(round(v)) if v is not None else None for v in result]
+            elif 'salary' in column_name.lower() or 'income' in column_name.lower():
+                return [int(round(v / 1000) * 1000) if v is not None else None for v in result]
+            elif 'score' in column_name.lower() or 'rating' in column_name.lower():
+                return [round(v, 1) if v is not None else None for v in result]
             else:
-                # Apply fixed discrete noise from the appropriate pool
-                result.append(self._add_discrete_noise(val, column_name))
-
-        return result
+                return [int(round(v)) if (v is not None and abs(v) > 10) else (round(v, 1) if v is not None else None) for v in result]
+        except Exception:
+            return self._bucket_values(numeric_values, num_buckets=10)
     
     def _transform_categorical(self, values: List[Any], config: PrivacyConfig, dataset_size: int) -> List[Any]:
         """Transform categorical columns (NON-DP k-anonymity)"""
@@ -1202,14 +1226,8 @@ class PrivacyEngine:
     
     def _safe_numeric(self, value: Any):
         """Safely convert to numeric"""
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        # Clean string: remove $, commas, spaces
-        val_str = str(value).replace('$', '').replace(',', '').strip()
         try:
-            return float(val_str)
+            return float(value)
         except (ValueError, TypeError):
             return None
     

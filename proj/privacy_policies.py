@@ -9,10 +9,10 @@ from typing import Dict, Any, List, Tuple
 
 class PrivacyLevel(Enum):
     """Privacy protection levels"""
-    MINIMAL = 1
-    STANDARD = 2
-    STRICT = 3
-    MAXIMUM = 4
+    MINIMAL = 1      # Basic protection, maximize utility
+    STANDARD = 2     # Balanced protection
+    STRICT = 3       # Strong protection
+    MAXIMUM = 4      # Maximum protection, utility may suffer
 
 
 @dataclass
@@ -153,7 +153,7 @@ class PolicyLibrary:
             transform_identifiers=True,
             transform_quasi_identifiers=True,
             add_noise_to_numeric=True,
-            generalize_categorical=False,
+            generalize_categorical=False,  # Keep categories intact
             redact_sensitive=True,
             preserve_statistical_properties=True,
             utility_weight=0.7

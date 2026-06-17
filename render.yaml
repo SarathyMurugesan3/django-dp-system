@@ -1,28 +1,26 @@
 services:
   - type: web
-    name: dp-privacy-system
+    name: django-dp-system
     env: python
     buildCommand: "./build.sh"
-    startCommand: "cd proj && PYTHONPATH=/opt/render/project/src/proj gunicorn --chdir /opt/render/project/src/proj proj.wsgi:application --bind 0.0.0.0:$PORT"
+    startCommand: "gunicorn -c gunicorn_config.py proj.wsgi:application"
     envVars:
       - key: PYTHON_VERSION
         value: 3.10.6
       - key: SECRET_KEY
         generateValue: true
-      - key: DP_NOISE_SECRET_KEY
-        generateValue: true
+      - key: DEBUG
+        value: false
+      - key: ALLOWED_HOSTS
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
-          name: dp-database
+          name: django-dp-db
           property: connectionString
-      - key: DJANGO_SETTINGS_MODULE
-        value: proj.settings
-      - key: DEBUG
-        value: False
-      - key: DP_SEED_ROTATION_HOURS
-        value: 24
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
 
 databases:
-  - name: dp-database
-    databaseName: privacy_db
-    user: privacy_user
+  - name: django-dp-db
+    databaseName: django_dp_system
+    user: django_dp_user
