@@ -2,7 +2,7 @@ from rest_framework.decorators import api_view, parser_classes
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework import status
-from django.db import connection
+from django.db import connection, transaction
 from .risk_engine import RiskAssessmentEngine
 from .privacy_engine import PrivacyEngine
 from .privacy_policies import PolicyLibrary, TransformationRules
@@ -574,27 +574,34 @@ def upload_and_anonymize_file(request):
             placeholders = ", ".join(["%s"] * len(headers))
             insert_sql = f"INSERT INTO `{table_name}` ({cols_sql}) VALUES ({placeholders})"
             
-            BATCH_SIZE = 500
+            BATCH_SIZE = 1000  # Increased batch size to 1000 for faster throughput
             batch = []
             
-            with connection.cursor() as cursor:
-                for row in rows_iterator:
-                    if filename_lower.endswith(".csv"):
-                        clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
-                    else:
-                        clean_row = row
-                        
-                    records_count += 1
-                    if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
-                        privacy_sample.append(clean_row)
-                        
-                    batch.append(tuple(clean_row.get(c, "") for c in headers))
-                    if len(batch) >= BATCH_SIZE:
-                        cursor.executemany(insert_sql, batch)
-                        batch = []
-                if batch:
-                    cursor.executemany(insert_sql, batch)
-            db_saved = True
+            try:
+                with transaction.atomic():
+                    with connection.cursor() as cursor:
+                        for row in rows_iterator:
+                            if filename_lower.endswith(".csv"):
+                                clean_row = {str(k).strip(): (str(v).strip() if v is not None else "") for k, v in row.items()}
+                            else:
+                                clean_row = row
+                                
+                            records_count += 1
+                            if len(privacy_sample) < PRIVACY_SAMPLE_SIZE:
+                                privacy_sample.append(clean_row)
+                                
+                            batch.append(tuple(clean_row.get(c, "") for c in headers))
+                            if len(batch) >= BATCH_SIZE:
+                                cursor.executemany(insert_sql, batch)
+                                batch = []
+                        if batch:
+                            cursor.executemany(insert_sql, batch)
+                db_saved = True
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Transaction failed during streaming upload: {str(e)}")
+                db_saved = False
+                db_error = str(e)
         else:
             # DB setup failed, just parse the sample and count records without database insert
             for row in rows_iterator:

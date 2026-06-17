@@ -2,7 +2,7 @@ import csv
 import os
 import re
 from django.core.management.base import BaseCommand
-from django.db import connection
+from django.db import connection, transaction
 
 
 def sanitize_column(name):
@@ -65,23 +65,24 @@ class Command(BaseCommand):
                 placeholders = ", ".join(["%s"] * len(raw_columns))
                 insert_sql = f"INSERT INTO `{table_name}` ({cols_sql}) VALUES ({placeholders})"
 
-                # Batch insert for speed (500 rows per round-trip)
-                BATCH_SIZE = 500
+                # Batch insert for speed (2000 rows per round-trip)
+                BATCH_SIZE = 2000
                 batch = []
                 created = 0
 
-                for row in reader:
-                    batch.append(tuple(row[c] for c in raw_columns))
-                    if len(batch) >= BATCH_SIZE:
+                with transaction.atomic():
+                    for row in reader:
+                        batch.append(tuple(row[c] for c in raw_columns))
+                        if len(batch) >= BATCH_SIZE:
+                            cursor.executemany(insert_sql, batch)
+                            created += len(batch)
+                            batch = []
+                            self.stdout.write(f"  -> {created} rows inserted...", ending="\r")
+
+                    # Insert any remaining rows
+                    if batch:
                         cursor.executemany(insert_sql, batch)
                         created += len(batch)
-                        batch = []
-                        self.stdout.write(f"  -> {created} rows inserted...", ending="\r")
-
-                # Insert any remaining rows
-                if batch:
-                    cursor.executemany(insert_sql, batch)
-                    created += len(batch)
 
         self.stdout.write("")
         self.stdout.write("[OK] Import completed")
