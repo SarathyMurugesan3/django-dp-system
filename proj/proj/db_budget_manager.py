@@ -98,6 +98,10 @@ class DatabasePrivacyBudgetManager:
         # Lock the ledger row to prevent concurrent modifications
         ledger = LedgerModel.objects.select_for_update().get(pk=ledger.pk)
         
+        # ADD THIS CHECK:
+        if ledger.epsilon_remaining < epsilon_cost:
+            return ""
+        
         # Deduct epsilon
         ledger.epsilon_remaining -= epsilon_cost
         ledger.save(update_fields=['epsilon_remaining', 'updated_at'])
@@ -124,6 +128,32 @@ class DatabasePrivacyBudgetManager:
         
         return query_id
     
+    @staticmethod
+    @transaction.atomic
+    def spend_budget(user_id: str, epsilon_cost: float, query_type: str) -> Tuple[bool, str]:
+        try:
+            # Lock the row for this transaction — prevents race condition
+            ledger = LedgerModel.objects.select_for_update().get(user_id=user_id)
+        except LedgerModel.DoesNotExist:
+            return False, "Ledger not found"
+
+        if ledger.epsilon_remaining < epsilon_cost:
+            return False, f"Insufficient budget. Remaining: {ledger.epsilon_remaining:.4f}"
+
+        ledger.epsilon_remaining -= epsilon_cost
+        ledger.save()
+
+        TransactionModel.objects.create(
+            ledger=ledger,
+            epsilon_cost=epsilon_cost,
+            query_type=query_type,
+            epsilon_remaining=ledger.epsilon_remaining,
+            mechanism_used='direct',
+            query_id=secrets.token_hex(8)
+        )
+
+        return True, f"Spent ε={epsilon_cost}. Remaining: {ledger.epsilon_remaining:.4f}"
+
     @staticmethod
     @transaction.atomic
     def refill_budget(ledger: LedgerModel) -> Optional[float]:
@@ -279,25 +309,32 @@ class LedgerWrapper:
         self.global_seed = bytes(ledger_model.global_seed)
         self.transactions = []  # Populated on demand
     
-    def can_afford(self, epsilon_cost: float) -> bool:
-        """Check if user has enough budget"""
-        self.ledger_model.refresh_from_db()
-        self.epsilon_remaining = self.ledger_model.epsilon_remaining
-        return self.db_manager.can_afford(self.ledger_model, epsilon_cost)
-    
-    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str) -> str:
-        """Deduct epsilon and record transaction"""
-        query_id = self.db_manager.deduct(
-            self.ledger_model,
-            query_type=query_type,
-            epsilon_cost=epsilon_cost,
-            mechanism=mechanism
+    def spend_if_affordable(self, epsilon_cost: float, query_type: str) -> Tuple[bool, str]:
+        """
+        Atomic check-and-spend. Use this instead of can_afford() + deduct().
+        Prevents TOCTOU race condition.
+        """
+        return DatabasePrivacyBudgetManager.spend_budget(
+            self.user_id, epsilon_cost, query_type
         )
-        # Refresh to get updated epsilon_remaining
-        self.ledger_model.refresh_from_db()
-        self.epsilon_remaining = self.ledger_model.epsilon_remaining
-        return query_id
-    
+
+    def deduct(self, query_type: str, epsilon_cost: float, mechanism: str = "direct") -> str:
+        """
+        Deduct epsilon from budget and record transaction.
+        Returns query_id string (empty string if insufficient budget).
+        Compatible with PrivacyEngine's expected interface.
+        """
+        success, msg = DatabasePrivacyBudgetManager.spend_budget(
+            self.user_id, epsilon_cost, query_type
+        )
+        # Sync local state after deduction
+        try:
+            self.ledger_model.refresh_from_db()
+            self.epsilon_remaining = self.ledger_model.epsilon_remaining
+        except Exception:
+            pass
+        return msg if success else ""
+
     def get_degradation_factor(self) -> float:
         """Calculate noise scaling factor based on remaining budget"""
         self.ledger_model.refresh_from_db()

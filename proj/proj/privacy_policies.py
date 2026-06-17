@@ -86,7 +86,7 @@ class PolicyLibrary:
         return PrivacyPolicy(
             name="Standard Protection",
             level=PrivacyLevel.STANDARD,
-            epsilon=2.0,  # Higher epsilon = less privacy, more utility
+            epsilon=2.0,
             delta=1e-5,
             k_anonymity=5,
             description="Balanced privacy and utility",
@@ -105,7 +105,7 @@ class PolicyLibrary:
         return PrivacyPolicy(
             name="Strict Protection",
             level=PrivacyLevel.STRICT,
-            epsilon=1.0,  # Lower epsilon = better privacy
+            epsilon=1.0,
             delta=1e-6,
             k_anonymity=10,
             description="Strong privacy with moderate utility",

@@ -24,51 +24,44 @@ budget_manager_wrapper = DatabaseBudgetWrapper()
 def execute_db_query(request):
     """
     Execute differential privacy query on database table
-    
-    New API Format:
-    {
-      "user_id": "analyst_001",
-      "table_name": "demographics",
-      "field_name": "age",
-      "query_type": "mean",
-      "filters": {
-        "age": {"operator": ">", "value": 18},
-        "state": {"operator": "=", "value": "Maharashtra"}
-      }
-    }
-    
-    Returns:
-    {
-      "result": 35.234,
-      "metadata": {
-        "query_type": "mean",
-        "epsilon_cost": 0.05,
-        "budget_multiplier": 3.0,
-        "effective_cost": 0.15,
-        "similar_queries_detected": 2,
-        "warning": "⚠️ Similar query detected. Budget cost increased 3x."
-      }
-    }
     """
-    user_id = request.data.get("user_id", "default")
-    table_name = request.data.get("table_name")
-    field_name = request.data.get("field_name")
-    query_type_str = request.data.get("query_type", "mean")
-    filters = request.data.get("filters", {})
-    
+    import traceback
+    try:
+        user_id = request.data.get("user_id", "default")
+        table_name = request.data.get("table_name")
+        field_name = request.data.get("field_name")
+        query_type_str = request.data.get("query_type", "mean")
+        filters = request.data.get("filters", {})
+
+        response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
+        return Response(response_data, status=status_code)
+    except Exception as e:
+        # Catch ALL uncaught errors and return as JSON so we can debug
+        return Response({
+            "error": "Unexpected server error",
+            "type": type(e).__name__,
+            "message": str(e),
+            "traceback": traceback.format_exc()
+        }, status=500)
+
+
+def process_db_query(user_id, table_name, field_name, query_type_str, filters):
+    """
+    Core logic for executing DB queries (reusable by other views)
+    """
     # Validation
     if not table_name:
-        return Response({"error": "table_name required"}, status=400)
+        return {"error": "table_name required"}, 400
     if not field_name:
-        return Response({"error": "field_name required"}, status=400)
+        return {"error": "field_name required"}, 400
     
     try:
         query_type = QueryType(query_type_str.lower())
     except ValueError:
-        return Response({
+        return {
             "error": "Invalid query type",
             "valid_types": ["count", "mean", "sum", "variance", "std"]
-        }, status=400)
+        }, 400
     
     # Step 1: Create query fingerprint
     current_fingerprint = QueryFingerprint(
@@ -129,15 +122,21 @@ def execute_db_query(request):
     # Step 3: Fetch data from database
     try:
         data, data_min, data_max = fetch_data_from_db(table_name, field_name, filters)
+    except ValueError as e:
+        # User input error (e.g., unknown filter column) — return 400
+        return {
+            "error": "Invalid filter",
+            "message": str(e)
+        }, 400
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         print(f"Database query error: {error_details}")  # Log to console
-        return Response({
+        return {
             "error": "Database query failed",
             "message": str(e),
             "details": error_details
-        }, status=500)
+        }, 500
     
     # For COUNT queries, we don't need numeric data - just count the rows
     if query_type == QueryType.COUNT:
@@ -153,15 +152,15 @@ def execute_db_query(request):
                     if isinstance(condition, dict):
                         operator = condition.get('operator', '=')
                         value = condition.get('value')
-                        where_clauses.append(f'"{field}" {operator} %s')
+                        where_clauses.append(f'`{field}` {operator} %s')
                         params.append(value)
                     else:
-                        where_clauses.append(f'"{field}" = %s')
+                        where_clauses.append(f'`{field}` = %s')
                         params.append(condition)
                 
                 where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
                 
-                sql = f'SELECT COUNT(*) FROM "{table_name}" WHERE {where_sql}'
+                sql = f'SELECT COUNT(*) FROM `{table_name}` WHERE {where_sql}'
                 with connection.cursor() as cursor:
                     cursor.execute(sql, params)
                     actual_count = cursor.fetchone()[0]
@@ -170,21 +169,21 @@ def execute_db_query(request):
                 data = [1] * actual_count  # Dummy data for count
                 data_min, data_max = 0, actual_count
             except Exception as e:
-                return Response({
+                return {
                     "error": "Count query failed",
                     "message": str(e)
-                }, status=500)
+                }, 500
     
     # For non-COUNT queries, we need numeric data
     if query_type != QueryType.COUNT and (not data or len(data) == 0):
-        return Response({
+        return {
             "error": "No numeric data found",
             "message": f"Field '{field_name}' appears to be categorical or empty. For demographics table, try 'recordid' for numeric queries.",
             "table": table_name,
             "field": field_name,
             "filters": filters,
             "suggestion": "Use 'recordid' as field_name for numeric queries, or use query_type='count' for categorical fields"
-        }, status=400)
+        }, 400
     
     # Step 4: Auto-detect bounds from data
     if query_type == QueryType.COUNT:
@@ -197,7 +196,7 @@ def execute_db_query(request):
     # Step 5: Execute DP query with budget multiplier
     engine = PrivacyEngine(budget_manager=budget_manager_wrapper)
     
-    # Get base epsilon cost
+    # Get base epsilon
     from .privacy_engine import QUERY_EPSILON_COST
     base_epsilon_cost = QUERY_EPSILON_COST[query_type]
     effective_epsilon_cost = base_epsilon_cost * budget_multiplier
@@ -214,7 +213,7 @@ def execute_db_query(request):
     )
     
     if result is None:
-        return Response(metadata, status=429)
+        return metadata, 429
     
     # Step 6: Adjust budget if multiplier > 1.0
     if budget_multiplier > 1.0:
@@ -274,21 +273,12 @@ def execute_db_query(request):
             else:
                 metadata['warning'] = f"⚠️ Similar query detected. Budget cost increased {budget_multiplier}x."
     
-    return Response({
+    return {
         "result": result,
         "metadata": metadata,
         "similar_queries": similar_queries if len(similar_queries) > 0 else None
-    })
+    }, 200
 
-
-def get_postgres_type(value):
-    """Determine PostgreSQL type for casting"""
-    if isinstance(value, (int, float)):
-        return 'numeric'
-    elif isinstance(value, bool):
-        return 'boolean'
-    else:
-        return 'text'
 
 
 def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple:
@@ -313,6 +303,26 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
         original_field = field_name
         field_name = FIELD_MAPPING[table_name.lower()].get(field_name.lower(), field_name)
     
+    # Validate filter columns against actual table schema (skip for JSON tables)
+    if filters and table_name.lower() != 'dataset_records':
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
+                actual_columns = {row[0].lower() for row in cursor.fetchall()}
+            unknown_fields = [
+                f for f in filters.keys()
+                if f.lower() not in actual_columns
+            ]
+            if unknown_fields:
+                raise ValueError(
+                    f"Unknown filter column(s) {unknown_fields} in table '{table_name}'. "
+                    f"Available columns: {sorted(actual_columns)}"
+                )
+        except ValueError:
+            raise  # Re-raise our own validation error
+        except Exception:
+            pass  # If SHOW COLUMNS itself fails, let the main query fail naturally
+
     # Build WHERE clause from filters
     where_clauses = []
     params = []
@@ -329,44 +339,42 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             
             # Check if this is a JSON field access (dataset_records table)
             if table_name.lower() == 'dataset_records' and field != 'dataset_name':
-                # JSON field access: data->>'FieldName'
-                where_clauses.append(f"(data->>%s)::{get_postgres_type(value)} {operator} %s")
-                params.append(field)
-                params.append(value)
+                # JSON field access for MySQL: JSON_UNQUOTE(JSON_EXTRACT(data, '$.FieldName'))
+                where_clauses.append(f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, %s)) AS CHAR) {operator} %s")
+                params.append(f'$.{field}')
+                params.append(str(value))
             else:
-                # Regular column - add type casting for numeric comparisons
-                if isinstance(value, (int, float)) and operator in ['>', '<', '>=', '<=']:
-                    # Cast to numeric for numeric comparisons
-                    where_clauses.append(f'"{field}"::numeric {operator} %s')
-                else:
-                    where_clauses.append(f'"{field}" {operator} %s')
+                # Regular column — use backticks for MySQL
+                where_clauses.append(f'`{field}` {operator} %s')
                 params.append(value)
         else:
             # Simple equality
             if table_name.lower() == 'dataset_records':
-                where_clauses.append(f"data->>%s = %s")
-                params.append(field)
+                where_clauses.append(f"JSON_UNQUOTE(JSON_EXTRACT(data, %s)) = %s")
+                params.append(f'$.{field}')
                 params.append(str(condition))
             else:
-                where_clauses.append(f'"{field}" = %s')
+                where_clauses.append(f'`{field}` = %s')
                 params.append(condition)
     
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Build SELECT clause based on table type
     if table_name.lower() == 'dataset_records':
-        # Extract from JSON column and cast to numeric, handling empty strings
-        select_clause = f"NULLIF(TRIM(data->>'{field_name}'), '')::numeric"
+        # Extract from JSON column — MySQL syntax
+        select_clause = f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field_name}')) AS DECIMAL(20,6))"
+        null_check = f"JSON_EXTRACT(data, '$.{field_name}') IS NOT NULL"
     else:
-        # Regular column
-        select_clause = f'"{field_name}"'
+        # Regular column — use backticks for MySQL
+        select_clause = f'`{field_name}`'
+        null_check = f'`{field_name}` IS NOT NULL'
     
-    # Build SQL query
+    # Build SQL query — backtick table name for MySQL
     sql = f'''
         SELECT {select_clause}
-        FROM "{table_name}"
+        FROM `{table_name}`
         WHERE {where_sql}
-        AND {select_clause} IS NOT NULL
+        AND {null_check}
         LIMIT 10000
     '''
     
@@ -375,55 +383,22 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             cursor.execute(sql, params)
             rows = cursor.fetchall()
     except Exception as e:
-        error_msg = str(e).lower()
-        # If JSON extraction fails or type casting fails, try different approaches
-        if 'does not exist' in error_msg or 'cannot cast' in error_msg or 'invalid input syntax' in error_msg:
-            # Try without casting first to see if field exists
-            try:
-                test_sql = f'''
-                    SELECT data->>'{field_name}'
-                    FROM "{table_name}"
-                    WHERE {where_sql}
-                    LIMIT 5
-                '''
-                with connection.cursor() as cursor:
-                    cursor.execute(test_sql, params)
-                    test_rows = cursor.fetchall()
-                    
-                if not test_rows or all(row[0] is None or row[0] == '' for row in test_rows):
-                    # Field doesn't exist or is empty
-                    raise ValueError(f"Field '{field_name}' not found or empty in table '{table_name}'")
-                
-                # Field exists but might have non-numeric values
-                # Try to extract and convert manually
-                sql = f'''
-                    SELECT data->>'{field_name}'
-                    FROM "{table_name}"
-                    WHERE {where_sql}
-                    AND data->>'{field_name}' IS NOT NULL
-                    AND data->>'{field_name}' != ''
-                    LIMIT 10000
-                '''
-                with connection.cursor() as cursor:
-                    cursor.execute(sql, params)
-                    rows = cursor.fetchall()
-            except Exception as inner_e:
-                # Last resort: try as regular column
-                sql = f'''
-                    SELECT "{field_name}"
-                    FROM "{table_name}"
-                    WHERE {where_sql}
-                    AND "{field_name}" IS NOT NULL
-                    LIMIT 10000
-                '''
-                try:
-                    with connection.cursor() as cursor:
-                        cursor.execute(sql, params)
-                        rows = cursor.fetchall()
-                except Exception as final_e:
-                    raise Exception(f"Failed to query field '{field_name}': {str(final_e)}")
+        # If JSON extraction fails on the SELECT field, try as regular column.
+        # Only fall back when the error is about the SELECT field, not a WHERE filter.
+        err_str = str(e).lower()
+        if ('does not exist' in err_str or 'cannot cast' in err_str) and 'unknown column' not in err_str:
+            sql = f'''
+                SELECT `{field_name}`
+                FROM `{table_name}`
+                WHERE {where_sql}
+                AND `{field_name}` IS NOT NULL
+                LIMIT 10000
+            '''
+            with connection.cursor() as cursor:
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
         else:
-            raise Exception(f"Database query failed: {str(e)}")
+            raise
     
     if not rows:
         return [], 0, 0
@@ -478,4 +453,35 @@ def get_query_history(request, user_id):
         'user_id': user_id,
         'total_queries': len(history_data),
         'history': history_data
+    })
+
+
+@api_view(["GET"])
+def list_tables(request):
+    """
+    List available database tables for querying
+    """
+    all_tables = connection.introspection.table_names()
+    
+    # Filter out system tables and Django internal tables
+    filtered_tables = [
+        t for t in all_tables 
+        if not t.startswith('django_') 
+        and not t.startswith('auth_') 
+        and not t.startswith('privacy_')  # Hide internal privacy system tables
+        and t not in ['sqlite_sequence']
+    ]
+    
+    # Add descriptions/metadata if available (optional)
+    tables_meta = []
+    for t in filtered_tables:
+        tables_meta.append({
+            "table_name": t,
+            "display_name": t.replace('_', ' ').title(),
+            "type": "structured"
+        })
+        
+    return Response({
+        "tables": tables_meta,
+        "count": len(tables_meta)
     })

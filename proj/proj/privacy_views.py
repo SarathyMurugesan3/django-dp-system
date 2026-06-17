@@ -26,14 +26,24 @@ def assess_and_privatize(request):
 
     records = request.data.get("records")
     table_name = request.data.get("table_name")
+    ALLOWED_SCHEMAS = {'public', 'railway', 'app_data'}
     schema = request.data.get("schema", "public")
+    if schema not in ALLOWED_SCHEMAS:
+        return Response({"error": f"Invalid schema. Allowed: {list(ALLOWED_SCHEMAS)}"}, status=400)
+    
     save_to_db = request.data.get("save_to_db", False)
 
     # Load DB table if requested
     if table_name:
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]+$', schema) or not re.match(r'^[a-zA-Z0-9_]+$', table_name):
+            return Response({"error": "Invalid table or schema name"}, status=400)
+            
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f'SELECT * FROM "{schema}"."{table_name}" LIMIT 500;')
+                quoted_schema = connection.ops.quote_name(schema)
+                quoted_table_name = connection.ops.quote_name(table_name)
+                cursor.execute(f'SELECT * FROM {quoted_schema}.{quoted_table_name} LIMIT 500;')
                 columns = [col[0] for col in cursor.description]
                 rows = cursor.fetchall()
 
@@ -46,7 +56,9 @@ def assess_and_privatize(request):
                 return Response({"error": "Table exists but has no data"}, status=404)
 
         except Exception as e:
-            return Response({"error": f"Table fetch failed: {str(e)}"}, status=500)
+            import logging
+            logging.getLogger(__name__).error(f"Table fetch failed: {str(e)}")
+            return Response({"error": "Table fetch failed"}, status=500)
 
     if not records:
         return Response({"error": "records or table_name required"}, status=400)
@@ -62,13 +74,16 @@ def assess_and_privatize(request):
     # ==========================
     privacy_engine = PrivacyEngine()
 
+    from .column_classifier import ColumnClassifier
+
+    classifier = ColumnClassifier()
+    column_classifications = classifier.classify_columns(records)
+
     anonymized_records, privacy_metadata = privacy_engine.apply_privacy(
         records,
-        column_classifications={
-            col: {"type": "quasi_identifier", "sensitivity": "moderate"}
-            for col in records[0].keys()
-        },
-        risk_score=original_risk["risk_score"]
+        column_classifications=column_classifications,
+        risk_score=original_risk["risk_score"],
+        policy_name=policy_name
     )
 
     # ⚠️ SECURITY NOTE: After this point, 'records' variable containing original data
@@ -98,13 +113,13 @@ def assess_and_privatize(request):
     if save_to_db and table_name:
         try:
             with connection.cursor() as cursor:
-                # Create anonymized table if not exists
+                # Create anonymized table if not exists (MySQL-compatible)
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS anonymized_records (
-                        id SERIAL PRIMARY KEY,
+                        id INT AUTO_INCREMENT PRIMARY KEY,
                         source_table TEXT,
-                        data JSONB,
-                        created_at TIMESTAMP DEFAULT NOW()
+                        data JSON,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
 
@@ -128,9 +143,11 @@ def assess_and_privatize(request):
         
         "risk_score": original_score,
         "risk_level": original_risk["risk_level"],
+        "primary_risk_drivers": original_risk.get("primary_risk_drivers", []),
         
         "new_risk_score": new_score,
         "new_risk_level": new_risk["risk_level"],
+        "new_risk_drivers": new_risk.get("primary_risk_drivers", []),
         
         "risk_reduction_percent": reduction,
         
@@ -237,3 +254,47 @@ def compare_policies(request):
         })
 
     return Response({"comparison": results})
+
+
+# =========================
+# BRIDGE: HACKER -> GUARDIAN
+# =========================
+@api_view(["POST"])
+def trigger_guardian_from_hacker(request):
+    """
+    Bridge endpoint: Hacker AI calls this when a vulnerability is found.
+    Triggers Guardian AI to anonymize the affected data.
+    """
+    vulnerability = request.data.get("vulnerability", {})
+    records = request.data.get("records", [])
+
+    if not records:
+        return Response({
+            "status": "notification_received",
+            "vulnerability": vulnerability,
+            "message": "No records provided - Guardian notified, awaiting dataset.",
+            "action_required": True
+        }, status=200)
+
+    from .column_classifier import ColumnClassifier
+    classifier = ColumnClassifier()
+    column_classifications = classifier.classify_columns(records)
+
+    engine = PrivacyEngine()
+    patched_records, metadata = engine.apply_privacy(
+        records,
+        column_classifications,
+        risk_score=85,  # High risk - hacker found something
+        policy_name="maximum"
+    )
+
+    return Response({
+        "status": "guardian_applied",
+        "triggered_by": vulnerability.get("attack", "unknown"),
+        "severity": vulnerability.get("severity", "unknown"),
+        "columns_patched": list(metadata.get("transformations", {}).keys()),
+        "budget_remaining": metadata.get(
+            "privacy_config", {}).get("epsilon_remaining", "unknown"),
+        "escalations": metadata.get("columns_escalated_to_review", []),
+        "record_count": len(patched_records)
+    })

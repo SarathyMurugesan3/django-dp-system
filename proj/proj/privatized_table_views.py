@@ -50,11 +50,8 @@ def get_privatized_table(request):
             if isinstance(condition, dict):
                 operator = condition.get('operator', '=')
                 value = condition.get('value')
-                # Use JSON path for filtering with type casting
-                if isinstance(value, (int, float)) and operator in ['>', '<', '>=', '<=']:
-                    where_clauses.append(f"(data->>'{field}')::numeric {operator} %s")
-                else:
-                    where_clauses.append(f"data->>'{field}' {operator} %s")
+                # Use JSON path for filtering
+                where_clauses.append(f"data->>'{field}' {operator} %s")
                 params.append(str(value))
             else:
                 where_clauses.append(f"data->>'{field}' = %s")
@@ -65,11 +62,7 @@ def get_privatized_table(request):
             if isinstance(condition, dict):
                 operator = condition.get('operator', '=')
                 value = condition.get('value')
-                # Add type casting for numeric comparisons
-                if isinstance(value, (int, float)) and operator in ['>', '<', '>=', '<=']:
-                    where_clauses.append(f'"{field}"::numeric {operator} %s')
-                else:
-                    where_clauses.append(f'"{field}" {operator} %s')
+                where_clauses.append(f'"{field}" {operator} %s')
                 params.append(value)
             else:
                 where_clauses.append(f'"{field}" = %s')
@@ -161,11 +154,17 @@ def get_privatized_table(request):
             epsilon_remaining=10.0
         )
     
-    # Apply privacy transformations
+    # Compute actual risk score from real data before applying privacy
+    from .risk_engine import RiskAssessmentEngine
+    risk_engine = RiskAssessmentEngine()
+    risk_result = risk_engine.analyze_dataset(records)
+    actual_risk_score = risk_result["risk_score"]
+
+    # Apply privacy transformations using real risk score
     privatized_records, metadata = engine.apply_privacy(
         records=records,
         column_classifications=column_classifications,
-        risk_score=50,
+        risk_score=actual_risk_score,
         user_id=user_id
     )
     
@@ -196,6 +195,9 @@ def get_privatized_table(request):
         "record_count": len(privatized_records),
         "table": table_name,
         "filters": filters,
+        "risk_score": actual_risk_score,
+        "risk_level": risk_result["risk_level"],
+        "risk_drivers": risk_result["primary_risk_drivers"],
         "epsilon_used": 1.0,
         "epsilon_remaining": ledger.epsilon_remaining,
         "privacy_metadata": {

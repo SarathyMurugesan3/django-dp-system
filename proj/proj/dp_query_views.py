@@ -12,27 +12,87 @@ budget_manager = DatabasePrivacyBudgetManager()
 @api_view(["POST"])
 def execute_dp_query(request):
     """
-    Execute differential privacy query on database with deterministic noise.
+    Execute differential privacy query with budget enforcement
     
-    This is an alias for /api/privacy/db-query/ for backward compatibility.
-    NO DATA ARRAY REQUIRED - queries database directly.
+    Supports two modes:
     
-    Example:
+    1. Direct Data Mode (backward compatible):
     {
       "user_id": "analyst_001",
-      "table_name": "dataset_records",
-      "field_name": "Age",
       "query_type": "mean",
-      "filters": {"Gender": "Female"}
+      "data": [25, 30, 35, 40, 45],
+      "lower_bound": 0,
+      "upper_bound": 100,
+      "field_name": "age"
+    }
+    
+    2. Database Query Mode (new):
+    {
+      "user_id": "analyst_001",
+      "table_name": "demographics",
+      "field_name": "age",
+      "query_type": "mean",
+      "filters": {
+        "age": {"operator": ">", "value": 18}
+      }
     }
     """
-    # Simply delegate to db_query_views by importing the core processing logic
-    # We import the internal processing function, not the view decorator
-    from .db_query_views import execute_db_query
+    user_id = request.data.get("user_id", "default")
+    query_type_str = request.data.get("query_type", "count")
     
-    # Call the view function directly - it will handle the REST framework request properly
-    # Since both are @api_view decorated, they work with the same request type
-    return execute_db_query(request)
+    # Check if this is a database query or direct data query
+    table_name = request.data.get("table_name")
+    
+    if table_name:
+        # Database query mode - use shared logic
+        from .db_query_views import process_db_query
+        
+        # Extract fields
+        field_name = request.data.get("field_name")
+        filters = request.data.get("filters", {})
+        
+        response_data, status_code = process_db_query(user_id, table_name, field_name, query_type_str, filters)
+        return Response(response_data, status=status_code)
+    
+    # Direct data mode (original behavior)
+    data = request.data.get("data", [])
+    lower_bound = request.data.get("lower_bound", 0)
+    upper_bound = request.data.get("upper_bound", 1000)
+    field_name = request.data.get("field_name", "value")
+    
+    try:
+        query_type = QueryType(query_type_str.lower())
+    except ValueError:
+        return Response({
+            "error": "Invalid query type",
+            "valid_types": ["count", "mean", "sum", "variance", "std"]
+        }, status=400)
+    
+    if not data:
+        return Response({
+            "error": "data array required for direct data mode",
+            "hint": "Either provide 'data' array OR provide 'table_name' + 'field_name' for database queries"
+        }, status=400)
+    
+    # Use wrapper for PrivacyEngine compatibility
+    engine = PrivacyEngine(budget_manager=budget_manager_wrapper)
+    
+    result, metadata = engine.execute_dp_query(
+        data=data,
+        query_type=query_type,
+        user_id=user_id,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        field_name=field_name
+    )
+    
+    if result is None:
+        return Response(metadata, status=429)
+    
+    return Response({
+        "result": result,
+        "metadata": metadata
+    })
 
 
 

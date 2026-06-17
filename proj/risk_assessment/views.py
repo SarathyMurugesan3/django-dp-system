@@ -31,8 +31,7 @@ def assess_dataset_risk(request):
     return Response({
         "dataset": dataset_name,
         "record_count": len(records),
-        "risk_result": risk_result,
-        "sample_records": records[:3]
+        "risk_result": risk_result
     })
 
 
@@ -69,10 +68,9 @@ def assess_table_risk(request):
         return Response(result, status=200)
 
     except Exception as e:
-        return Response(
-            {"error": "Risk assessment failed", "detail": str(e)},
-            status=500
-        )
+        import logging
+        logging.getLogger(__name__).error(f"assess_table_risk failed: {str(e)}")
+        return Response({"error": "Risk assessment failed"}, status=500)
 
 
 # ============================
@@ -85,7 +83,12 @@ def list_tables(request):
             cursor.execute("""
                 SELECT table_schema, table_name
                 FROM information_schema.tables
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                WHERE table_schema NOT IN (
+                    'information_schema',
+                    'mysql',
+                    'performance_schema',
+                    'sys'
+                )
                 AND table_type = 'BASE TABLE'
                 ORDER BY table_schema, table_name;
             """)
@@ -103,64 +106,82 @@ def list_tables(request):
 # ============================
 @api_view(['POST'])
 def assess_query_risk(request):
-    query = request.data.get('query')
+    query = request.data.get('query', '').strip()
 
     if not query:
         return Response({"error": "query required"}, status=400)
 
-    forbidden = ['DROP', 'DELETE', 'TRUNCATE', 'ALTER', 'INSERT', 'UPDATE']
-    if any(word in query.upper() for word in forbidden):
+    query_upper = query.upper()
+
+    if not query_upper.startswith('SELECT'):
         return Response({"error": "Only SELECT queries allowed"}, status=400)
+
+    blocked = ['DROP','DELETE','TRUNCATE','ALTER','INSERT',
+               'UPDATE','EXEC','EXECUTE','UNION','SLEEP',
+               'BENCHMARK','OUTFILE','LOAD_FILE']
+    for word in blocked:
+        if word in query_upper:
+            return Response({"error": f"Disallowed keyword: {word}"}, status=400)
+
+    if 'LIMIT' not in query_upper:
+        query = query.rstrip(';') + ' LIMIT 100'
+        
+    # Prevent multiple statements
+    if query.count(';') > 1 or (query.count(';') == 1 and not query.rstrip().endswith(';')):
+        return Response({"error": "Multiple statements not allowed"}, status=400)
+    
+    # Strip trailing semicolon before execution
+    query = query.rstrip(';')
 
     try:
         with connection.cursor() as cursor:
             cursor.execute(query)
-
             columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
-
             records = [
-                {col: (val if val is not None else "") for col, val in zip(columns, row)}
+                {col: (val if val is not None else "")
+                 for col, val in zip(columns, row)}
                 for row in rows
             ]
-
         if not records:
-            return Response({"error": "No results returned"}, status=404)
+            return Response({"error": "No results"}, status=404)
 
         engine = RiskAssessmentEngine()
         result = engine.analyze_dataset(records)
+        return Response({"record_count": len(records), "risk_result": result})
 
-        return Response({
-            "query": query,
-            "record_count": len(records),
-            "risk_result": result
-        })
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
+    except Exception:
+        return Response({"error": "Query execution failed"}, status=500)
 
 
 # ============================
 # SAFE TABLE FETCHER
 # ============================
 def fetch_table_data(table_name, schema='public'):
+    import re
+    if not re.match(r'^[a-zA-Z0-9_]+$', schema):
+        return []
+    if not re.match(r'^[a-zA-Z0-9_]+$', table_name):
+        return []
+
     with connection.cursor() as cursor:
 
-        # Validate table exists
+        # Validate table exists — use DATABASE() for MySQL compatibility
+        # (MySQL has no 'public' schema; schema = database name)
         cursor.execute("""
             SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = %s AND table_name = %s
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = DATABASE() AND table_name = %s
             );
-        """, [schema, table_name])
+        """, [table_name])
 
         exists = cursor.fetchone()[0]
 
         if not exists:
             return []
 
-        # Safe fetch with LIMIT to avoid overload
-        cursor.execute(f'SELECT * FROM "{schema}"."{table_name}" LIMIT 500;')
+        quoted_table = connection.ops.quote_name(table_name)
+        cursor.execute(f'SELECT * FROM {quoted_table} LIMIT 500;')
 
         columns = [col[0] for col in cursor.description]
         rows = cursor.fetchall()

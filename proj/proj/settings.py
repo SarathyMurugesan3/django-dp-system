@@ -32,25 +32,23 @@ SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-ve1ptm4zahjwnv*o_)g0!
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = [
-    'localhost',
-    '127.0.0.1',
-    '.onrender.com',  # Allow all Render subdomains
-    '*'  # Remove this in production after testing
-]
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '*').split(',')
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    'django.contrib.staticfiles',  # Required for collectstatic command
+    'corsheaders',  # CORS support for frontend
     'rest_framework', 
     'risk_assessment',
     'proj.apps.ProjConfig',  # Privacy budget models
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  # Must be before CommonMiddleware
     'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',  # For static files in production
+    'whitenoise.middleware.WhiteNoiseMiddleware',  # Add WhiteNoise for static files
     'django.middleware.common.CommonMiddleware',
 ]
 
@@ -91,18 +89,14 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
-STATIC_URL = '/static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Add this at the bottom
 REST_FRAMEWORK = {
@@ -130,20 +124,34 @@ MIGRATION_MODULES = {
 }
 
 
-# ============================================================================
-# DIFFERENTIAL PRIVACY NOISE CONFIGURATION
-# ============================================================================
+# CORS Configuration
+# Allow requests from frontend development servers
+CORS_ALLOWED_ORIGINS = os.environ.get(
+    'CORS_ALLOWED_ORIGINS',
+    'http://localhost:5173,http://localhost:3000'
+).split(',')
 
-# Secret key for deterministic noise generation
-# CRITICAL: Keep this secret! Rotate periodically.
-# In production, set via environment variable: DP_NOISE_SECRET_KEY
-DP_NOISE_SECRET_KEY = os.environ.get(
-    'DP_NOISE_SECRET_KEY',
-    'INSECURE_DEFAULT_DEV_KEY_CHANGE_IN_PRODUCTION_f8a3b2c1d4e5'  # Dev only
-)
+# Allow credentials (cookies, authorization headers, etc.)
+CORS_ALLOW_CREDENTIALS = True
 
-# Noise seed rotation window (in hours)
-# Default: 24 hours (daily rotation)
-# Options: 1 (hourly), 24 (daily), 168 (weekly)
-DP_SEED_ROTATION_HOURS = int(os.environ.get('DP_SEED_ROTATION_HOURS', '24'))
+# Additional CORS settings
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
 
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]

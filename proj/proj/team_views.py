@@ -16,6 +16,7 @@ def create_team(request):
     """
     Create a new team
     
+    
     POST /api/teams/create/
     {
         "team_id": "data_team_01",

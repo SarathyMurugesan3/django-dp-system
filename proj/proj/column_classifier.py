@@ -46,8 +46,13 @@ class ColumnClassifier:
                     r'\b(email|mail|e-mail)\b',
                     r'\b(ssn|social.?security)\b',
                     r'\b(username|user.?name|login)\b',
-                    r'\b(account|account.?number)\b',
-                    r'\b(license|permit|registration)\b'
+                    r'\b(account|account.?number|acc.?no|acct)\b',
+                    r'\b(license|permit|registration|dl)\b',
+                    r'\b(aadhaar|aadhar|adhar|uidai|uid)\b',
+                    r'\b(pan|pancard|pan.?number)\b',
+                    r'\b(passport)\b',
+                    r'\b(voter.?id|voter)\b',
+                    r'\b(ifsc|ifsc.?code)\b'
                 ],
                 'sensitivity': 'high'
             },
@@ -55,12 +60,13 @@ class ColumnClassifier:
                 'patterns': [
                     r'\b(name|first.?name|last.?name|full.?name)\b',
                     r'\b(age|birth|dob|date.?of.?birth)\b',
-                    r'\b(zip|zipcode|postal|postcode)\b',
-                    r'\b(phone|telephone|mobile|cell)\b',
-                    r'\b(address|street|location|city|state|province)\b',
+                    r'\b(zip|zipcode|postal|postcode|pincode)\b',
+                    r'\b(phone|telephone|mobile|cell|phn|mob|contact)\b',
+                    r'\b(address|street|location|city|state|province|district)\b',
                     r'\b(gender|sex)\b',
-                    r'\b(race|ethnicity|nationality)\b',
-                    r'\b(occupation|job|title|position)\b'
+                    r'\b(race|ethnicity|nationality|religion)\b',
+                    r'\b(occupation|job|title|position|profession)\b',
+                    r'\b(college|school|university|institute|clg|scl|clgname|sclname)\b'
                 ],
                 'sensitivity': 'moderate'
             },
@@ -68,10 +74,10 @@ class ColumnClassifier:
                 'patterns': [
                     r'\b(password|passwd|pwd|secret|token)\b',
                     r'\b(credit.?card|card.?number|cvv|cvc)\b',
-                    r'\b(medical|health|diagnosis|condition)\b',
-                    r'\b(salary|income|wage|compensation|pay)\b',
-                    r'\b(bank|routing|account.?number)\b',
-                    r'\b(tax|ein|tin)\b'
+                    r'\b(medical|health|diagnosis|condition|disease)\b',
+                    r'\b(salary|income|wage|compensation|pay|wealth)\b',
+                    r'\b(bank|routing|transaction|balance)\b',
+                    r'\b(tax|ein|tin|gst|gstin)\b'
                 ],
                 'sensitivity': 'critical'
             },
@@ -92,8 +98,8 @@ class ColumnClassifier:
             'numeric': {
                 'patterns': [
                     r'\b(count|total|sum|amount|quantity|number)\b',
-                    r'\b(price|cost|value|revenue)\b',
-                    r'\b(score|rating|rank)\b',
+                    r'\b(price|cost|value|revenue|budget)\b',
+                    r'\b(score|rating|rank|cibil)\b',
                     r'\b(percentage|percent|ratio|rate)\b'
                 ],
                 'sensitivity': 'low'

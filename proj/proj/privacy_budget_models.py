@@ -53,10 +53,6 @@ class PrivacyBudgetTransaction(models.Model):
     bounds_lower = models.FloatField(default=0.0)
     bounds_upper = models.FloatField(default=0.0)
     
-    # Deterministic noise metadata (NEW)
-    noise_deterministic = models.BooleanField(default=True)  # True = HMAC-based deterministic
-    noise_seed_window = models.CharField(max_length=50, default='')  # e.g., "2026-02-05-00"
-    
     class Meta:
         db_table = 'privacy_budget_transactions'
         ordering = ['-timestamp']
@@ -83,11 +79,6 @@ class PrivacyBudgetTransaction(models.Model):
                 'true_result_bounds': f"[{self.bounds_lower}, {self.bounds_upper}]",
                 'degradation_applied': f"{self.degradation_factor}x",
                 'effective_epsilon': round(self.epsilon_cost * self.degradation_factor, 6)
-            },
-            'noise_metadata': {
-                'deterministic': self.noise_deterministic,
-                'seed_window': self.noise_seed_window,
-                'rotation_policy': 'daily' if self.noise_deterministic else 'N/A'
             }
         }
     

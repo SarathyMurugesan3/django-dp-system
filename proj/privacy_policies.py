@@ -9,10 +9,10 @@ from typing import Dict, Any, List, Tuple
 
 class PrivacyLevel(Enum):
     """Privacy protection levels"""
-    MINIMAL = 1      # Basic protection, maximize utility
-    STANDARD = 2     # Balanced protection
-    STRICT = 3       # Strong protection
-    MAXIMUM = 4      # Maximum protection, utility may suffer
+    MINIMAL = 1
+    STANDARD = 2
+    STRICT = 3
+    MAXIMUM = 4
 
 
 @dataclass
