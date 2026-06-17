@@ -93,7 +93,30 @@ def assess_and_privatize(request):
     # ==========================
     # STEP 3 — RISK AFTER
     # ==========================
-    new_risk = risk_engine.analyze_dataset(anonymized_records)
+    # Determine DP parameters actually used so the post-privacy risk
+    # assessment can apply a correct, analytically-motivated discount
+    # instead of re-scoring the noisy integers at face value.
+    privacy_config_used = privacy_metadata.get("privacy_config", {})
+    epsilon_used = privacy_config_used.get("epsilon_total")
+
+    # Count how many columns received DP noise vs non-DP anonymization
+    transformations = privacy_metadata.get("transformations", {})
+    dp_col_count = sum(
+        1 for info in transformations.values()
+        if info.get("privacy_guarantee") == "DIFFERENTIAL_PRIVACY"
+    )
+    anon_col_count = sum(
+        1 for info in transformations.values()
+        if info.get("privacy_guarantee") == "NON_DP_ANONYMIZATION"
+    )
+
+    new_risk = risk_engine.analyze_dataset(
+        anonymized_records,
+        dp_applied=(dp_col_count > 0),
+        dp_epsilon=epsilon_used,
+        dp_column_count=dp_col_count,
+        anonymization_applied=(anon_col_count > 0),
+    )
 
     # ==========================
     # STEP 4 — RISK REDUCTION %
