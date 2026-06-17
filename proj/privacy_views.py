@@ -578,20 +578,25 @@ def upload_and_anonymize_file(request):
         logging.getLogger(__name__).error(f"Failed to save uploaded file to database: {str(e)}")
         db_error = str(e)
         
-    # Run Privacy Engine
+    # Run Privacy Engine on a sample to avoid timeout on large files
+    # Full data is already saved to DB; privacy analysis runs on sample
+    PRIVACY_SAMPLE_SIZE = 500
+    privacy_sample = records[:PRIVACY_SAMPLE_SIZE]
+    is_sampled = len(records) > PRIVACY_SAMPLE_SIZE
+
     try:
-        # Analyze risk before
+        # Analyze risk before (on sample)
         risk_engine = RiskAssessmentEngine()
-        original_risk = risk_engine.analyze_dataset(records)
+        original_risk = risk_engine.analyze_dataset(privacy_sample)
         
-        # Apply privacy
+        # Apply privacy (on sample)
         from .column_classifier import ColumnClassifier
         classifier = ColumnClassifier()
-        column_classifications = classifier.classify_columns(records)
+        column_classifications = classifier.classify_columns(privacy_sample)
         
         privacy_engine = PrivacyEngine()
         anonymized_records, privacy_metadata = privacy_engine.apply_privacy(
-            records,
+            privacy_sample,
             column_classifications=column_classifications,
             risk_score=original_risk["risk_score"],
             policy_name=policy_name
@@ -620,6 +625,8 @@ def upload_and_anonymize_file(request):
         }, status=200)
         
     message = "File uploaded, parsed, and anonymized successfully."
+    if is_sampled:
+        message += f" (Privacy report based on first {PRIVACY_SAMPLE_SIZE} of {len(records)} records; full data saved to DB.)"
     if db_saved:
         message += " Saved to database."
     else:
@@ -631,6 +638,7 @@ def upload_and_anonymize_file(request):
         "db_saved": db_saved,
         "db_error": db_error,
         "record_count": len(records),
+        "privacy_sample_size": len(privacy_sample),
         "policy_used": policy_name,
         "plfs_detected_type": plfs_type if not filename_lower.endswith(".csv") else None,
         
@@ -644,9 +652,9 @@ def upload_and_anonymize_file(request):
         
         "risk_reduction_percent": reduction,
         
-        # Directly display data to user
-        "original_data_preview": records[:50],  # Return preview to avoid massive payload size for huge files
-        "privatized_data": anonymized_records,   # Return full anonymized data
+        # Preview of original + privatized data (from sample)
+        "original_data_preview": privacy_sample[:50],
+        "privatized_data": anonymized_records[:50],
         
         "privacy_metadata": privacy_metadata
-    }, status=200)
+    }, status=200)

@@ -8,7 +8,7 @@ bind = f"0.0.0.0:{os.environ.get('PORT', '8000')}"
 workers = int(os.environ.get('WEB_CONCURRENCY', '1'))
 worker_class = 'sync'
 worker_connections = 1000
-timeout = 30
+timeout = 300  # Allow up to 5 minutes for large PLFS file uploads through privacy engine
 keepalive = 2
 
 # Logging
