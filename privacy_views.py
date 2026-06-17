@@ -110,12 +110,9 @@ def assess_and_privatize(request):
         if info.get("privacy_guarantee") == "NON_DP_ANONYMIZATION"
     )
 
-    new_risk = risk_engine.analyze_dataset(
+    new_risk = risk_engine.analyze_anonymized_dataset(
         anonymized_records,
-        dp_applied=(dp_col_count > 0),
-        dp_epsilon=epsilon_used,
-        dp_column_count=dp_col_count,
-        anonymization_applied=(anon_col_count > 0),
+        privacy_metadata
     )
 
     # ==========================
