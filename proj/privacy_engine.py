@@ -903,8 +903,10 @@ class PrivacyEngine:
         if column_type in ['sensitive', 'generic', 'identifier', 'quasi_identifier']:
             non_empty_values = [v for v in non_null_values if str(v).strip() != ""]
             if non_empty_values:
-                numeric_count = sum(1 for v in non_empty_values if self._safe_numeric(v) is not None)
-                if (numeric_count / len(non_empty_values)) >= 0.8:
+                # Sample the check (max first 100 values) for performance on large files
+                sample_vals = non_empty_values[:100]
+                numeric_count = sum(1 for v in sample_vals if self._safe_numeric(v) is not None)
+                if (numeric_count / len(sample_vals)) >= 0.8:
                     is_numeric_column = True
                     
             if is_numeric_column or self._is_currency_field(column_name):
