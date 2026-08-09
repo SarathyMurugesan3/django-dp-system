@@ -14,7 +14,6 @@ from .privacy_views import (
     upload_and_anonymize_file
 )
 from .dp_query_views import (
-    execute_dp_query,
     get_budget_status,
     get_audit_log,
     reset_budget
@@ -34,10 +33,7 @@ from .auth_views import (
     admin_delete_user,
     admin_verify_token,
 )
-from .cost_calculator_views import calculate_query_cost
-from .db_query_views import execute_db_query, get_query_history, list_tables
 from .team_views import create_team, join_team, get_team_members, leave_team
-from .privatized_table_views import get_privatized_table
 
 urlpatterns = [
     path('anonymization-proof/', anonymization_proof),
@@ -51,26 +47,14 @@ urlpatterns = [
     path('upload-file/', upload_and_anonymize_file),
 
     # ShadowSafe-Style Budget System Endpoints
-    path('dp-query/', execute_dp_query),
     path('budget-status/<str:user_id>/', get_budget_status),
     path('audit-log/<str:user_id>/', get_audit_log),
     path('reset-budget/<str:user_id>/', reset_budget),
-
-    # Database Query Endpoints with Fingerprinting
-    path('db-query/', execute_db_query),
-    path('query-history/<str:user_id>/', get_query_history),
-    path('tables/', list_tables),
-
-    # Privatized Table Data
-    path('privatized-table/', get_privatized_table),
 
     # Team Management Endpoints (public)
     path('teams/join/', join_team),
     path('teams/<str:team_id>/members/', get_team_members),
     path('teams/leave/', leave_team),
-
-    # Cost Calculator
-    path('calculate-cost/', calculate_query_cost),
 
     # Admin Endpoints (no auth — budget/stats)
     path('admin/all-budgets/', get_all_budgets),

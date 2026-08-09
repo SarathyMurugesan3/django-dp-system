@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, LayoutDashboard, Terminal, UploadCloud, Settings, User, Zap } from 'lucide-react';
+import { Shield, LayoutDashboard, UploadCloud, Settings, User, Zap } from 'lucide-react';
 import Dashboard from './components/Dashboard';
-import QueryConsole from './components/QueryConsole';
 import Anonymizer from './components/Anonymizer';
 import AdminConsole from './components/AdminConsole';
 import FastConverter from './components/FastConverter';
@@ -37,8 +36,6 @@ export default function App() {
     switch (activeTab) {
       case 'dashboard':
         return <Dashboard userId={userId} budget={budget} fetchBudget={fetchBudget} />;
-      case 'query':
-        return <QueryConsole userId={userId} fetchBudget={fetchBudget} />;
       case 'anonymizer':
         return <Anonymizer userId={userId} />;
       case 'fast-converter':
@@ -53,7 +50,6 @@ export default function App() {
   const getPageTitle = () => {
     switch (activeTab) {
       case 'dashboard': return { title: "System Analytics", sub: "Differential privacy telemetry and ledger activity logs" };
-      case 'query': return { title: "Privacy Query Console", sub: "Execute differential privacy aggregation queries on system databases" };
       case 'anonymizer': return { title: "Dataset Anonymizer", sub: "Load datasets locally, auto-classify sensitivity, and add noise protection" };
       case 'fast-converter': return { title: "Turbo FWF Converter", sub: "Convert fixed-width text files to CSV locally with on-the-fly anonymization" };
       case 'admin': return { title: "Administrative Control", sub: "Provision users, override ledgers, and manage security rules" };
@@ -79,12 +75,7 @@ export default function App() {
           >
             <LayoutDashboard className="nav-icon" /> Dashboard
           </li>
-          <li 
-            className={`nav-item ${activeTab === 'query' ? 'active' : ''}`}
-            onClick={() => setActiveTab('query')}
-          >
-            <Terminal className="nav-icon" /> Query Console
-          </li>
+
           <li 
             className={`nav-item ${activeTab === 'anonymizer' ? 'active' : ''}`}
             onClick={() => setActiveTab('anonymizer')}
