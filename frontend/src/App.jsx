@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, LayoutDashboard, Terminal, UploadCloud, Settings, User } from 'lucide-react';
+import { Shield, LayoutDashboard, Terminal, UploadCloud, Settings, User, Zap } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import QueryConsole from './components/QueryConsole';
 import Anonymizer from './components/Anonymizer';
 import AdminConsole from './components/AdminConsole';
+import FastConverter from './components/FastConverter';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -40,6 +41,8 @@ export default function App() {
         return <QueryConsole userId={userId} fetchBudget={fetchBudget} />;
       case 'anonymizer':
         return <Anonymizer userId={userId} />;
+      case 'fast-converter':
+        return <FastConverter />;
       case 'admin':
         return <AdminConsole userId={userId} fetchBudget={fetchBudget} />;
       default:
@@ -52,6 +55,7 @@ export default function App() {
       case 'dashboard': return { title: "System Analytics", sub: "Differential privacy telemetry and ledger activity logs" };
       case 'query': return { title: "Privacy Query Console", sub: "Execute differential privacy aggregation queries on system databases" };
       case 'anonymizer': return { title: "Dataset Anonymizer", sub: "Load datasets locally, auto-classify sensitivity, and add noise protection" };
+      case 'fast-converter': return { title: "Turbo FWF Converter", sub: "Convert fixed-width text files to CSV locally with on-the-fly anonymization" };
       case 'admin': return { title: "Administrative Control", sub: "Provision users, override ledgers, and manage security rules" };
       default: return { title: "System Analytics", sub: "Differential privacy telemetry and ledger activity logs" };
     }
@@ -86,6 +90,12 @@ export default function App() {
             onClick={() => setActiveTab('anonymizer')}
           >
             <UploadCloud className="nav-icon" /> Anonymizer
+          </li>
+          <li 
+            className={`nav-item ${activeTab === 'fast-converter' ? 'active' : ''}`}
+            onClick={() => setActiveTab('fast-converter')}
+          >
+            <Zap className="nav-icon" /> Turbo FWF
           </li>
           <li 
             className={`nav-item ${activeTab === 'admin' ? 'active' : ''}`}
