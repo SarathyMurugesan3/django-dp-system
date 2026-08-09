@@ -3,3 +3,8 @@ __pycache__/
 .env
 db.sqlite3
 staticfiles/
+node_modules/
+dist/
+frontend/dist/
+frontend/node_modules/
+
