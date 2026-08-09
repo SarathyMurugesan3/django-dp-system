@@ -43,6 +43,8 @@ def get_privatized_table(request):
     
     # Check if this is dataset_records table (JSON data)
     is_json_table = table_name.lower() == 'dataset_records'
+    is_postgres = connection.vendor == 'postgresql'
+    quoted_table = connection.ops.quote_name(table_name)
     
     if is_json_table:
         # For dataset_records, filter on JSON fields
@@ -51,27 +53,34 @@ def get_privatized_table(request):
                 operator = condition.get('operator', '=')
                 value = condition.get('value')
                 # Use JSON path for filtering
-                where_clauses.append(f"data->>'{field}' {operator} %s")
+                if is_postgres:
+                    where_clauses.append(f"data->>'{field}' {operator} %s")
+                else:
+                    where_clauses.append(f"JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field}')) {operator} %s")
                 params.append(str(value))
             else:
-                where_clauses.append(f"data->>'{field}' = %s")
+                if is_postgres:
+                    where_clauses.append(f"data->>'{field}' = %s")
+                else:
+                    where_clauses.append(f"JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field}')) = %s")
                 params.append(str(condition))
     else:
         # For regular tables, filter on columns
         for field, condition in filters.items():
+            quoted_field = connection.ops.quote_name(field)
             if isinstance(condition, dict):
                 operator = condition.get('operator', '=')
                 value = condition.get('value')
-                where_clauses.append(f'"{field}" {operator} %s')
+                where_clauses.append(f'{quoted_field} {operator} %s')
                 params.append(value)
             else:
-                where_clauses.append(f'"{field}" = %s')
+                where_clauses.append(f'{quoted_field} = %s')
                 params.append(condition)
     
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Fetch data
-    sql = f'SELECT * FROM "{table_name}" WHERE {where_sql} LIMIT %s'
+    sql = f'SELECT * FROM {quoted_table} WHERE {where_sql} LIMIT %s'
     params.append(limit)
     
     try:

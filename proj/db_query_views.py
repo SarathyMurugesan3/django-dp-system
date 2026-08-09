@@ -207,8 +207,8 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
     if filters and table_name.lower() != 'dataset_records':
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f"SHOW COLUMNS FROM `{table_name}`")
-                actual_columns = {row[0].lower() for row in cursor.fetchall()}
+                # Use Django introspection which is database vendor agnostic
+                actual_columns = {col.name.lower() for col in connection.introspection.get_table_description(cursor, table_name)}
             unknown_fields = [
                 f for f in filters.keys()
                 if f.lower() not in actual_columns
@@ -221,13 +221,18 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
         except ValueError:
             raise  # Re-raise our own validation error
         except Exception:
-            pass  # If SHOW COLUMNS itself fails, let the main query fail naturally
+            pass  # If introspection itself fails, let the main query fail naturally
+
+    is_postgres = connection.vendor == 'postgresql'
+    quoted_table = connection.ops.quote_name(table_name)
+    quoted_field = connection.ops.quote_name(field_name)
 
     # Build WHERE clause from filters
     where_clauses = []
     params = []
     
     for field, condition in filters.items():
+        quoted_filter_field = connection.ops.quote_name(field)
         if isinstance(condition, dict):
             operator = condition.get('operator', '=')
             value = condition.get('value')
@@ -239,40 +244,48 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
             
             # Check if this is a JSON field access (dataset_records table)
             if table_name.lower() == 'dataset_records' and field != 'dataset_name':
-                # JSON field access for MySQL: JSON_UNQUOTE(JSON_EXTRACT(data, '$.FieldName'))
-                where_clauses.append(f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, %s)) AS CHAR) {operator} %s")
-                params.append(f'$.{field}')
+                if is_postgres:
+                    where_clauses.append(f"CAST(data->>%s AS VARCHAR) {operator} %s")
+                    params.append(field)
+                else:
+                    where_clauses.append(f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, %s)) AS CHAR) {operator} %s")
+                    params.append(f'$.{field}')
                 params.append(str(value))
             else:
-                # Regular column — use backticks for MySQL
-                where_clauses.append(f'`{field}` {operator} %s')
+                where_clauses.append(f'{quoted_filter_field} {operator} %s')
                 params.append(value)
         else:
             # Simple equality
             if table_name.lower() == 'dataset_records':
-                where_clauses.append(f"JSON_UNQUOTE(JSON_EXTRACT(data, %s)) = %s")
-                params.append(f'$.{field}')
+                if is_postgres:
+                    where_clauses.append("data->>%s = %s")
+                    params.append(field)
+                else:
+                    where_clauses.append("JSON_UNQUOTE(JSON_EXTRACT(data, %s)) = %s")
+                    params.append(f'$.{field}')
                 params.append(str(condition))
             else:
-                where_clauses.append(f'`{field}` = %s')
+                where_clauses.append(f'{quoted_filter_field} = %s')
                 params.append(condition)
     
     where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
     
     # Build SELECT clause based on table type
     if table_name.lower() == 'dataset_records':
-        # Extract from JSON column — MySQL syntax
-        select_clause = f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field_name}')) AS DECIMAL(20,6))"
-        null_check = f"JSON_EXTRACT(data, '$.{field_name}') IS NOT NULL"
+        if is_postgres:
+            select_clause = f"CAST(data->>'{field_name}' AS DECIMAL(20,6))"
+            null_check = f"data->>'{field_name}' IS NOT NULL"
+        else:
+            select_clause = f"CAST(JSON_UNQUOTE(JSON_EXTRACT(data, '$.{field_name}')) AS DECIMAL(20,6))"
+            null_check = f"JSON_EXTRACT(data, '$.{field_name}') IS NOT NULL"
     else:
-        # Regular column — use backticks for MySQL
-        select_clause = f'`{field_name}`'
-        null_check = f'`{field_name}` IS NOT NULL'
+        select_clause = quoted_field
+        null_check = f'{quoted_field} IS NOT NULL'
     
-    # Build SQL query — backtick table name for MySQL
+    # Build SQL query
     sql = f'''
         SELECT {select_clause}
-        FROM `{table_name}`
+        FROM {quoted_table}
         WHERE {where_sql}
         AND {null_check}
         LIMIT 10000
@@ -288,10 +301,10 @@ def fetch_data_from_db(table_name: str, field_name: str, filters: dict) -> tuple
         err_str = str(e).lower()
         if ('does not exist' in err_str or 'cannot cast' in err_str) and 'unknown column' not in err_str:
             sql = f'''
-                SELECT `{field_name}`
-                FROM `{table_name}`
+                SELECT {quoted_field}
+                FROM {quoted_table}
                 WHERE {where_sql}
-                AND `{field_name}` IS NOT NULL
+                AND {quoted_field} IS NOT NULL
                 LIMIT 10000
             '''
             with connection.cursor() as cursor:
