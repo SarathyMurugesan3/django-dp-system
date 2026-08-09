@@ -45,7 +45,15 @@ export default function QueryConsole({ userId, fetchBudget }) {
     const fetchColumns = async () => {
       try {
         // Query first row to see column schema
-        const res = await fetch(`/api/privacy/privatized-table/?table=${selectedTable}&limit=1`);
+        const res = await fetch('/api/privacy/privatized-table/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            table_name: selectedTable,
+            limit: 1,
+            user_id: userId
+          })
+        });
         if (res.ok) {
           const data = await res.json();
           if (data.privatized_data && data.privatized_data.length > 0) {
