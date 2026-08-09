@@ -29,7 +29,7 @@ export default function QueryConsole({ userId, fetchBudget }) {
           const data = await res.json();
           setTables(data.tables || []);
           if (data.tables && data.tables.length > 0) {
-            setSelectedTable(data.tables[0]);
+            setSelectedTable(data.tables[0].table_name);
           }
         }
       } catch (e) {
@@ -154,7 +154,7 @@ export default function QueryConsole({ userId, fetchBudget }) {
           <div className="form-group">
             <label className="form-label">Database Table</label>
             <select className="form-select" value={selectedTable} onChange={(e) => setSelectedTable(e.target.value)}>
-              {tables.map(t => <option key={t} value={t}>{t}</option>)}
+              {tables.map(t => <option key={t.table_name} value={t.table_name}>{t.display_name}</option>)}
             </select>
           </div>
           <div className="form-group">
